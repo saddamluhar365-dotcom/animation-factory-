@@ -169,7 +169,7 @@ def test_channel_video_sync_and_deduplication(mem_db):
     ]
 
     added_2 = mem_db.save_channel_videos(cid, videos_batch_2)
-    assert added_2 == 2
+    assert added_2 == 1  # vid003 is new, vid001 is updated
 
     all_videos = mem_db.get_channel_videos(cid)
     assert len(all_videos) == 3  # exactly 3 unique videos
@@ -461,3 +461,124 @@ def test_planner_mode_g_duration_only(mem_db):
     assert plan.duration == 30
     assert len(plan.scenes) > 0
     assert validate_plan_continuity(plan) == []
+
+
+def test_user_prompt_duplicate_rejection_and_regeneration(mem_db):
+    """User provides a duplicate prompt; system detects duplicate and regenerates novel concept."""
+    prof = mem_db.save_channel_profile({
+        "handle": "@imaginator_officials",
+        "channel_id": "UC_dup_test",
+        "prevent_recipe_repeats": True,
+    })
+    cid = prof["id"]
+    mem_db.save_recipe_record({
+        "channel_profile_id": cid,
+        "recipe_name": "Crispy French Fries",
+        "normalized_recipe_name": "french fries",
+        "primary_ingredient": "potato",
+        "cooking_method": "deep fry",
+    })
+
+    planner = ChannelAwarePlanner(mem_db)
+    statuses = []
+    plan = planner.create_plan(
+        duration=30,
+        prompt="French Fries",
+        channel_profile=prof,
+        status_cb=lambda s: statuses.append(s),
+    )
+    assert any("Detected duplicate" in s for s in statuses)
+    assert plan.title.lower() != "french fries"
+    assert validate_plan_continuity(plan) == []
+
+
+def test_final_acceptance_channel_only_pipeline(monkeypatch, tmp_path):
+    """
+    Final acceptance test:
+    @channel_handle + NO prompt + NO manual reference
+    -> channel analysis -> recipe memory -> duplicate check -> content gaps
+    -> auto references -> improvement analysis -> new plan -> existing generation pipeline.
+    """
+    import io, shutil
+    from PIL import Image
+    import app.pipeline as pipeline
+
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("FFmpeg required for end-to-end acceptance test")
+
+    projects_dir = tmp_path / "projects"
+    output_dir = tmp_path / "output"
+    data_dir = tmp_path / "data"
+    projects_dir.mkdir()
+    output_dir.mkdir()
+    data_dir.mkdir()
+
+    sqlite_url = f"sqlite:///{(data_dir / 'memory.db').as_posix()}"
+    monkeypatch.setenv("YT_AUTO_DB_URL", sqlite_url)
+    monkeypatch.setattr(pipeline, "PROJECTS", projects_dir)
+    monkeypatch.setattr(pipeline, "OUTPUT", output_dir)
+    monkeypatch.setattr(pipeline, "load_config", lambda: {"reference_profile": {}})
+
+    # Mock HF image generator
+    def _create_img():
+        img = Image.new("RGB", (1080, 1920), color=(80, 120, 160))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        return buf.getvalue()
+
+    monkeypatch.setattr(pipeline, "hf_text_to_image", lambda prompt: _create_img())
+
+    # 1. Permanent channel configuration
+    db = MemoryDB(sqlite_url)
+    db.initialize()
+    resolver = ChannelResolver()
+    channel_profile = resolver.resolve("@imaginator_officials")
+    saved_prof = db.save_channel_profile(channel_profile.to_dict())
+    cid = saved_prof["id"]
+
+    # 2. Existing channel videos & recipe memory (saturation: chicken)
+    existing_videos = [
+        {"youtube_video_id": "v1", "title": "Butter Chicken Curry #Shorts", "duration_seconds": 45, "is_short": True},
+        {"youtube_video_id": "v2", "title": "Chicken Tikka Skewers #Shorts", "duration_seconds": 50, "is_short": True},
+    ]
+    db.save_channel_videos(cid, existing_videos)
+
+    extractor = RecipeExtractor(db)
+    for v in existing_videos:
+        extractor.extract_and_save(cid, v)
+
+    # Pre-existing recipes check
+    pre_recipes = db.get_recipes(cid)
+    assert len(pre_recipes) == 2
+
+    # 3. Compute Channel DNA and Improvement Signals
+    dna_engine = ChannelDNAEngine(db)
+    dna_engine.generate_dna(cid)
+    imp_engine = ImprovementEngine(db)
+    imp_engine.generate_recommendations(cid)
+
+    # 4. Run pipeline with NO prompt ("") and NO manual references (config has empty reference_profile)
+    status_updates = []
+    final_video = pipeline.run_project(
+        instruction="",
+        duration=1,
+        status_cb=lambda s: status_updates.append(s),
+    )
+
+    # 5. Verify results
+    assert final_video.exists()
+    assert final_video.is_file()
+    assert final_video.suffix == ".mp4"
+    assert final_video.stat().st_size > 1024
+
+    # Verify Channel Intelligence steps executed
+    assert any("Mode C (Channel Only)" in s for s in status_updates)
+    assert any("Analyzing content gaps" in s for s in status_updates)
+    assert any("QC PASS" in s for s in status_updates)
+
+    # Verify that the newly generated recipe is registered in Recipe Memory
+    post_recipes = db.get_recipes(cid)
+    assert len(post_recipes) == 3  # 2 existing + 1 newly registered!
+    new_recipe = post_recipes[0]  # sorted by created_at DESC
+    assert new_recipe["recipe_name"] != ""
+    assert new_recipe["recipe_name"].lower() not in ["butter chicken", "chicken tikka"]
