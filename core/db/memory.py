@@ -35,6 +35,13 @@ class MemoryDB:
                 "CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, project_key TEXT UNIQUE NOT NULL, instruction TEXT NOT NULL, duration INTEGER NOT NULL, state TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE, stage TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS engine_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, project_key TEXT NOT NULL DEFAULT '__global__', memory_type TEXT NOT NULL, memory_key TEXT NOT NULL, content TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_key, memory_type, memory_key))",
+                "CREATE TABLE IF NOT EXISTS channel_profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, handle TEXT UNIQUE NOT NULL, channel_id TEXT UNIQUE NOT NULL, uploads_playlist_id TEXT, title TEXT, description TEXT, custom_url TEXT, subscriber_count INTEGER DEFAULT 0, video_count INTEGER DEFAULT 0, auto_sync_enabled INTEGER DEFAULT 1, auto_analyze_enabled INTEGER DEFAULT 1, auto_reference_enabled INTEGER DEFAULT 1, prevent_recipe_repeats INTEGER DEFAULT 1, last_synced_at TEXT, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                "CREATE TABLE IF NOT EXISTS channel_sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'running', videos_discovered INTEGER DEFAULT 0, videos_added INTEGER DEFAULT 0, cursor TEXT, error_message TEXT, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, completed_at TEXT)",
+                "CREATE TABLE IF NOT EXISTS channel_videos (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, youtube_video_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, published_at TEXT, duration_seconds INTEGER DEFAULT 0, is_short INTEGER DEFAULT 1, video_url TEXT, thumbnail_url TEXT, etag TEXT, raw_metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(channel_profile_id, youtube_video_id))",
+                "CREATE TABLE IF NOT EXISTS recipe_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, channel_video_id INTEGER REFERENCES channel_videos(id) ON DELETE CASCADE, recipe_name TEXT NOT NULL, normalized_recipe_name TEXT NOT NULL, dish_category TEXT, cuisine TEXT, region TEXT, primary_ingredient TEXT, secondary_ingredients TEXT NOT NULL DEFAULT '[]', cooking_method TEXT, flavor_profile TEXT, environment TEXT, signatures TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(channel_profile_id, normalized_recipe_name))",
+                "CREATE TABLE IF NOT EXISTS channel_dna (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, dna_profile TEXT NOT NULL DEFAULT '{}', saturation_metrics TEXT NOT NULL DEFAULT '{}', version INTEGER DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(channel_profile_id))",
+                "CREATE TABLE IF NOT EXISTS channel_improvement_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, area TEXT NOT NULL, observation TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT '{}', recommendation TEXT NOT NULL, confidence REAL DEFAULT 1.0, status TEXT DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                "CREATE TABLE IF NOT EXISTS video_performance_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_video_id INTEGER REFERENCES channel_videos(id) ON DELETE CASCADE, views INTEGER DEFAULT 0, likes INTEGER DEFAULT 0, comments INTEGER DEFAULT 0, velocity_score REAL DEFAULT 0.0, retrieved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             ]
         else:
             statements = [
@@ -44,6 +51,13 @@ class MemoryDB:
                 "CREATE TABLE IF NOT EXISTS projects (id BIGSERIAL PRIMARY KEY, project_key TEXT UNIQUE NOT NULL, instruction TEXT NOT NULL, duration INTEGER NOT NULL, state JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())",
                 "CREATE TABLE IF NOT EXISTS checkpoints (id BIGSERIAL PRIMARY KEY, project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE, stage TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
                 "CREATE TABLE IF NOT EXISTS engine_memory (id BIGSERIAL PRIMARY KEY, project_key TEXT NOT NULL DEFAULT '__global__', memory_type TEXT NOT NULL, memory_key TEXT NOT NULL, content JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(project_key, memory_type, memory_key))",
+                "CREATE TABLE IF NOT EXISTS channel_profiles (id BIGSERIAL PRIMARY KEY, handle TEXT UNIQUE NOT NULL, channel_id TEXT UNIQUE NOT NULL, uploads_playlist_id TEXT, title TEXT, description TEXT, custom_url TEXT, subscriber_count INTEGER DEFAULT 0, video_count INTEGER DEFAULT 0, auto_sync_enabled INTEGER DEFAULT 1, auto_analyze_enabled INTEGER DEFAULT 1, auto_reference_enabled INTEGER DEFAULT 1, prevent_recipe_repeats INTEGER DEFAULT 1, last_synced_at TIMESTAMPTZ, metadata JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+                "CREATE TABLE IF NOT EXISTS channel_sync_runs (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'running', videos_discovered INTEGER DEFAULT 0, videos_added INTEGER DEFAULT 0, cursor TEXT, error_message TEXT, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), completed_at TIMESTAMPTZ)",
+                "CREATE TABLE IF NOT EXISTS channel_videos (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, youtube_video_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, published_at TIMESTAMPTZ, duration_seconds INTEGER DEFAULT 0, is_short INTEGER DEFAULT 1, video_url TEXT, thumbnail_url TEXT, etag TEXT, raw_metadata JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(channel_profile_id, youtube_video_id))",
+                "CREATE TABLE IF NOT EXISTS recipe_memory (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, channel_video_id BIGINT REFERENCES channel_videos(id) ON DELETE CASCADE, recipe_name TEXT NOT NULL, normalized_recipe_name TEXT NOT NULL, dish_category TEXT, cuisine TEXT, region TEXT, primary_ingredient TEXT, secondary_ingredients JSONB NOT NULL DEFAULT '[]'::jsonb, cooking_method TEXT, flavor_profile TEXT, environment TEXT, signatures JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(channel_profile_id, normalized_recipe_name))",
+                "CREATE TABLE IF NOT EXISTS channel_dna (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, dna_profile JSONB NOT NULL DEFAULT '{}'::jsonb, saturation_metrics JSONB NOT NULL DEFAULT '{}'::jsonb, version INTEGER DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(channel_profile_id))",
+                "CREATE TABLE IF NOT EXISTS channel_improvement_memory (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, area TEXT NOT NULL, observation TEXT NOT NULL, evidence JSONB NOT NULL DEFAULT '{}'::jsonb, recommendation TEXT NOT NULL, confidence REAL DEFAULT 1.0, status TEXT DEFAULT 'active', created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+                "CREATE TABLE IF NOT EXISTS video_performance_memory (id BIGSERIAL PRIMARY KEY, channel_video_id BIGINT REFERENCES channel_videos(id) ON DELETE CASCADE, views INTEGER DEFAULT 0, likes INTEGER DEFAULT 0, comments INTEGER DEFAULT 0, velocity_score REAL DEFAULT 0.0, retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now())",
             ]
         with self.engine.begin() as conn:
             for statement in statements:
@@ -51,6 +65,9 @@ class MemoryDB:
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_engine_memory_project ON engine_memory(project_key)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_engine_memory_type ON engine_memory(memory_type)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_engine_memory_created ON engine_memory(created_at DESC)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_channel_videos_channel ON channel_videos(channel_profile_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recipe_memory_norm ON recipe_memory(channel_profile_id, normalized_recipe_name)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recipe_memory_ing ON recipe_memory(primary_ingredient)"))
 
     def initialize(self) -> None:
         if self._initialized:
@@ -209,3 +226,487 @@ class MemoryDB:
 
     def remember_error(self, project_key: str, stage: str, error: Exception | str) -> None:
         self.remember_observation(project_key, {"key": f"error:{stage}:{datetime.now(timezone.utc).isoformat()}", "stage": stage, "error": str(error), "error_type": type(error).__name__ if isinstance(error, Exception) else "RuntimeError"})
+
+    def _decode_json(self, val: Any) -> Any:
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except Exception:
+                return val
+        return val
+
+    # -------------------------------------------------------------
+    # Permanent Channel Intelligence Storage
+    # -------------------------------------------------------------
+
+    def save_channel_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        """Save or update channel profile metadata."""
+        self.initialize()
+        handle = str(profile.get("handle", "")).strip()
+        if not handle.startswith("@") and handle and not handle.startswith("http"):
+            handle = f"@{handle}"
+        channel_id = str(profile.get("channel_id", "")).strip()
+        uploads_playlist_id = profile.get("uploads_playlist_id") or ""
+        title = profile.get("title") or ""
+        description = profile.get("description") or ""
+        custom_url = profile.get("custom_url") or ""
+        subscriber_count = int(profile.get("subscriber_count", 0))
+        video_count = int(profile.get("video_count", 0))
+        auto_sync_enabled = int(bool(profile.get("auto_sync_enabled", 1)))
+        auto_analyze_enabled = int(bool(profile.get("auto_analyze_enabled", 1)))
+        auto_reference_enabled = int(bool(profile.get("auto_reference_enabled", 1)))
+        prevent_recipe_repeats = int(bool(profile.get("prevent_recipe_repeats", 1)))
+        metadata_json = self._json(profile.get("metadata", {}))
+
+        with self.engine.begin() as conn:
+            if self.dialect == "sqlite":
+                conn.execute(text("""
+                    INSERT INTO channel_profiles (
+                        handle, channel_id, uploads_playlist_id, title, description,
+                        custom_url, subscriber_count, video_count, auto_sync_enabled,
+                        auto_analyze_enabled, auto_reference_enabled, prevent_recipe_repeats,
+                        metadata, updated_at
+                    ) VALUES (
+                        :handle, :channel_id, :uploads_playlist_id, :title, :description,
+                        :custom_url, :subscriber_count, :video_count, :auto_sync_enabled,
+                        :auto_analyze_enabled, :auto_reference_enabled, :prevent_recipe_repeats,
+                        :metadata, CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT(handle) DO UPDATE SET
+                        channel_id = excluded.channel_id,
+                        uploads_playlist_id = CASE WHEN excluded.uploads_playlist_id != '' THEN excluded.uploads_playlist_id ELSE channel_profiles.uploads_playlist_id END,
+                        title = CASE WHEN excluded.title != '' THEN excluded.title ELSE channel_profiles.title END,
+                        description = CASE WHEN excluded.description != '' THEN excluded.description ELSE channel_profiles.description END,
+                        custom_url = CASE WHEN excluded.custom_url != '' THEN excluded.custom_url ELSE channel_profiles.custom_url END,
+                        subscriber_count = CASE WHEN excluded.subscriber_count > 0 THEN excluded.subscriber_count ELSE channel_profiles.subscriber_count END,
+                        video_count = CASE WHEN excluded.video_count > 0 THEN excluded.video_count ELSE channel_profiles.video_count END,
+                        auto_sync_enabled = excluded.auto_sync_enabled,
+                        auto_analyze_enabled = excluded.auto_analyze_enabled,
+                        auto_reference_enabled = excluded.auto_reference_enabled,
+                        prevent_recipe_repeats = excluded.prevent_recipe_repeats,
+                        metadata = excluded.metadata,
+                        updated_at = CURRENT_TIMESTAMP
+                """), {
+                    "handle": handle, "channel_id": channel_id, "uploads_playlist_id": uploads_playlist_id,
+                    "title": title, "description": description, "custom_url": custom_url,
+                    "subscriber_count": subscriber_count, "video_count": video_count,
+                    "auto_sync_enabled": auto_sync_enabled, "auto_analyze_enabled": auto_analyze_enabled,
+                    "auto_reference_enabled": auto_reference_enabled, "prevent_recipe_repeats": prevent_recipe_repeats,
+                    "metadata": metadata_json
+                })
+            else:
+                conn.execute(text("""
+                    INSERT INTO channel_profiles (
+                        handle, channel_id, uploads_playlist_id, title, description,
+                        custom_url, subscriber_count, video_count, auto_sync_enabled,
+                        auto_analyze_enabled, auto_reference_enabled, prevent_recipe_repeats,
+                        metadata, updated_at
+                    ) VALUES (
+                        :handle, :channel_id, :uploads_playlist_id, :title, :description,
+                        :custom_url, :subscriber_count, :video_count, :auto_sync_enabled,
+                        :auto_analyze_enabled, :auto_reference_enabled, :prevent_recipe_repeats,
+                        CAST(:metadata AS jsonb), now()
+                    )
+                    ON CONFLICT(handle) DO UPDATE SET
+                        channel_id = EXCLUDED.channel_id,
+                        uploads_playlist_id = CASE WHEN EXCLUDED.uploads_playlist_id != '' THEN EXCLUDED.uploads_playlist_id ELSE channel_profiles.uploads_playlist_id END,
+                        title = CASE WHEN EXCLUDED.title != '' THEN EXCLUDED.title ELSE channel_profiles.title END,
+                        description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE channel_profiles.description END,
+                        custom_url = CASE WHEN EXCLUDED.custom_url != '' THEN EXCLUDED.custom_url ELSE channel_profiles.custom_url END,
+                        subscriber_count = CASE WHEN EXCLUDED.subscriber_count > 0 THEN EXCLUDED.subscriber_count ELSE channel_profiles.subscriber_count END,
+                        video_count = CASE WHEN EXCLUDED.video_count > 0 THEN EXCLUDED.video_count ELSE channel_profiles.video_count END,
+                        auto_sync_enabled = EXCLUDED.auto_sync_enabled,
+                        auto_analyze_enabled = EXCLUDED.auto_analyze_enabled,
+                        auto_reference_enabled = EXCLUDED.auto_reference_enabled,
+                        prevent_recipe_repeats = EXCLUDED.prevent_recipe_repeats,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = now()
+                """), {
+                    "handle": handle, "channel_id": channel_id, "uploads_playlist_id": uploads_playlist_id,
+                    "title": title, "description": description, "custom_url": custom_url,
+                    "subscriber_count": subscriber_count, "video_count": video_count,
+                    "auto_sync_enabled": auto_sync_enabled, "auto_analyze_enabled": auto_analyze_enabled,
+                    "auto_reference_enabled": auto_reference_enabled, "prevent_recipe_repeats": prevent_recipe_repeats,
+                    "metadata": metadata_json
+                })
+
+        res = self.get_channel_profile(handle=handle)
+        return res or {}
+
+    def get_channel_profile(self, handle: str | None = None, channel_id: str | None = None, profile_id: int | None = None) -> dict[str, Any] | None:
+        """Get channel profile by handle, channel_id, profile_id, or return the latest active profile."""
+        self.initialize()
+        clauses = []
+        params: dict[str, Any] = {}
+        if profile_id is not None:
+            clauses.append("id = :profile_id")
+            params["profile_id"] = profile_id
+        elif handle:
+            h = handle.strip()
+            if not h.startswith("@") and not h.startswith("http"):
+                h_alt = f"@{h}"
+                clauses.append("(handle = :handle OR handle = :h_alt)")
+                params["handle"] = h
+                params["h_alt"] = h_alt
+            else:
+                clauses.append("handle = :handle")
+                params["handle"] = h
+        elif channel_id:
+            clauses.append("channel_id = :channel_id")
+            params["channel_id"] = channel_id
+
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        query = f"SELECT * FROM channel_profiles{where} ORDER BY updated_at DESC LIMIT 1"
+        with self.engine.begin() as conn:
+            row = conn.execute(text(query), params).mappings().first()
+        if not row:
+            return None
+        res = dict(row)
+        res["metadata"] = self._decode_json(res.get("metadata"))
+        return res
+
+    def list_channel_profiles(self) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.engine.begin() as conn:
+            rows = conn.execute(text("SELECT * FROM channel_profiles ORDER BY updated_at DESC")).mappings().all()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["metadata"] = self._decode_json(d.get("metadata"))
+            result.append(d)
+        return result
+
+    def update_channel_settings(self, profile_id: int, **settings: Any) -> None:
+        self.initialize()
+        if not settings:
+            return
+        fields = []
+        params: dict[str, Any] = {"id": profile_id}
+        allowed = {
+            "auto_sync_enabled", "auto_analyze_enabled", "auto_reference_enabled",
+            "prevent_recipe_repeats", "last_synced_at", "video_count", "subscriber_count"
+        }
+        for k, v in settings.items():
+            if k in allowed:
+                fields.append(f"{k} = :{k}")
+                params[k] = int(v) if isinstance(v, bool) else v
+        if not fields:
+            return
+        sql = f"UPDATE channel_profiles SET {', '.join(fields)} WHERE id = :id"
+        with self.engine.begin() as conn:
+            conn.execute(text(sql), params)
+
+    def record_sync_run(self, channel_profile_id: int, status: str = "running", videos_discovered: int = 0, videos_added: int = 0, cursor: str | None = None, error_message: str | None = None, run_id: int | None = None) -> int:
+        self.initialize()
+        with self.engine.begin() as conn:
+            if run_id:
+                completed = "CURRENT_TIMESTAMP" if self.dialect == "sqlite" else "now()"
+                conn.execute(text(f"""
+                    UPDATE channel_sync_runs SET status = :status, videos_discovered = :discovered,
+                    videos_added = :added, cursor = :cursor, error_message = :err, completed_at = {completed}
+                    WHERE id = :run_id
+                """), {"status": status, "discovered": videos_discovered, "added": videos_added, "cursor": cursor, "err": error_message, "run_id": run_id})
+                return run_id
+            else:
+                if self.dialect == "sqlite":
+                    cursor_res = conn.execute(text("""
+                        INSERT INTO channel_sync_runs (channel_profile_id, status, videos_discovered, videos_added, cursor, error_message)
+                        VALUES (:cid, :status, :discovered, :added, :cursor, :err)
+                    """), {"cid": channel_profile_id, "status": status, "discovered": videos_discovered, "added": videos_added, "cursor": cursor, "err": error_message})
+                    return cursor_res.lastrowid or 0
+                else:
+                    cursor_res = conn.execute(text("""
+                        INSERT INTO channel_sync_runs (channel_profile_id, status, videos_discovered, videos_added, cursor, error_message)
+                        VALUES (:cid, :status, :discovered, :added, :cursor, :err) RETURNING id
+                    """), {"cid": channel_profile_id, "status": status, "discovered": videos_discovered, "added": videos_added, "cursor": cursor, "err": error_message})
+                    row = cursor_res.first()
+                    return row[0] if row else 0
+
+    def save_channel_videos(self, channel_profile_id: int, videos: list[dict[str, Any]]) -> int:
+        self.initialize()
+        if not videos:
+            return 0
+        added = 0
+        with self.engine.begin() as conn:
+            for v in videos:
+                vid = str(v.get("youtube_video_id") or v.get("id") or "").strip()
+                if not vid:
+                    continue
+                title = str(v.get("title") or "")
+                desc = str(v.get("description") or "")
+                published_at = v.get("published_at")
+                duration = int(v.get("duration_seconds") or 0)
+                is_short = int(bool(v.get("is_short", True)))
+                video_url = v.get("video_url") or f"https://www.youtube.com/watch?v={vid}"
+                thumbnail_url = v.get("thumbnail_url") or ""
+                etag = v.get("etag") or ""
+                raw_meta = self._json(v.get("raw_metadata") or {})
+
+                if self.dialect == "sqlite":
+                    conn.execute(text("""
+                        INSERT INTO channel_videos (
+                            channel_profile_id, youtube_video_id, title, description,
+                            published_at, duration_seconds, is_short, video_url, thumbnail_url,
+                            etag, raw_metadata
+                        ) VALUES (
+                            :cid, :vid, :title, :desc, :published_at, :duration, :is_short,
+                            :video_url, :thumb, :etag, :meta
+                        )
+                        ON CONFLICT(channel_profile_id, youtube_video_id) DO UPDATE SET
+                            title = excluded.title,
+                            description = excluded.description,
+                            duration_seconds = excluded.duration_seconds,
+                            is_short = excluded.is_short,
+                            thumbnail_url = excluded.thumbnail_url,
+                            raw_metadata = excluded.raw_metadata
+                    """), {
+                        "cid": channel_profile_id, "vid": vid, "title": title, "desc": desc,
+                        "published_at": published_at, "duration": duration, "is_short": is_short,
+                        "video_url": video_url, "thumb": thumbnail_url, "etag": etag, "meta": raw_meta
+                    })
+                else:
+                    conn.execute(text("""
+                        INSERT INTO channel_videos (
+                            channel_profile_id, youtube_video_id, title, description,
+                            published_at, duration_seconds, is_short, video_url, thumbnail_url,
+                            etag, raw_metadata
+                        ) VALUES (
+                            :cid, :vid, :title, :desc, :published_at, :duration, :is_short,
+                            :video_url, :thumb, :etag, CAST(:meta AS jsonb)
+                        )
+                        ON CONFLICT(channel_profile_id, youtube_video_id) DO UPDATE SET
+                            title = EXCLUDED.title,
+                            description = EXCLUDED.description,
+                            duration_seconds = EXCLUDED.duration_seconds,
+                            is_short = EXCLUDED.is_short,
+                            thumbnail_url = EXCLUDED.thumbnail_url,
+                            raw_metadata = EXCLUDED.raw_metadata
+                    """), {
+                        "cid": channel_profile_id, "vid": vid, "title": title, "desc": desc,
+                        "published_at": published_at, "duration": duration, "is_short": is_short,
+                        "video_url": video_url, "thumb": thumbnail_url, "etag": etag, "meta": raw_meta
+                    })
+                added += 1
+
+            now_str = datetime.now(timezone.utc).isoformat()
+            conn.execute(text("""
+                UPDATE channel_profiles
+                SET video_count = (SELECT COUNT(*) FROM channel_videos WHERE channel_profile_id = :cid),
+                    last_synced_at = :now
+                WHERE id = :cid
+            """), {"cid": channel_profile_id, "now": now_str})
+
+        return added
+
+    def get_channel_videos(self, channel_profile_id: int, only_shorts: bool = False, limit: int = 500) -> list[dict[str, Any]]:
+        self.initialize()
+        clauses = ["channel_profile_id = :cid"]
+        params: dict[str, Any] = {"cid": channel_profile_id, "limit": limit}
+        if only_shorts:
+            clauses.append("is_short = 1")
+        where = " WHERE " + " AND ".join(clauses)
+        sql = f"SELECT * FROM channel_videos{where} ORDER BY published_at DESC LIMIT :limit"
+        with self.engine.begin() as conn:
+            rows = conn.execute(text(sql), params).mappings().all()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["raw_metadata"] = self._decode_json(d.get("raw_metadata"))
+            results.append(d)
+        return results
+
+    def save_recipe_record(self, record: dict[str, Any]) -> int:
+        self.initialize()
+        cid = int(record["channel_profile_id"])
+        vid = record.get("channel_video_id")
+        name = str(record.get("recipe_name", "")).strip()
+        norm = str(record.get("normalized_recipe_name", "")).strip().lower()
+        if not norm:
+            norm = name.lower()
+        dish_category = record.get("dish_category") or ""
+        cuisine = record.get("cuisine") or ""
+        region = record.get("region") or ""
+        primary_ing = str(record.get("primary_ingredient") or "").strip().lower()
+        secondary_ings = self._json(record.get("secondary_ingredients") or [])
+        method = record.get("cooking_method") or ""
+        flavor = record.get("flavor_profile") or ""
+        env = record.get("environment") or ""
+        sigs = self._json(record.get("signatures") or {})
+
+        with self.engine.begin() as conn:
+            if self.dialect == "sqlite":
+                res = conn.execute(text("""
+                    INSERT INTO recipe_memory (
+                        channel_profile_id, channel_video_id, recipe_name, normalized_recipe_name,
+                        dish_category, cuisine, region, primary_ingredient, secondary_ingredients,
+                        cooking_method, flavor_profile, environment, signatures
+                    ) VALUES (
+                        :cid, :vid, :name, :norm, :dish, :cuisine, :region, :primary_ing,
+                        :secondary_ings, :method, :flavor, :env, :sigs
+                    )
+                    ON CONFLICT(channel_profile_id, normalized_recipe_name) DO UPDATE SET
+                        recipe_name = excluded.recipe_name,
+                        dish_category = excluded.dish_category,
+                        cuisine = excluded.cuisine,
+                        region = excluded.region,
+                        primary_ingredient = excluded.primary_ingredient,
+                        secondary_ingredients = excluded.secondary_ingredients,
+                        cooking_method = excluded.cooking_method,
+                        flavor_profile = excluded.flavor_profile,
+                        environment = excluded.environment,
+                        signatures = excluded.signatures
+                """), {
+                    "cid": cid, "vid": vid, "name": name, "norm": norm, "dish": dish_category,
+                    "cuisine": cuisine, "region": region, "primary_ing": primary_ing,
+                    "secondary_ings": secondary_ings, "method": method, "flavor": flavor,
+                    "env": env, "sigs": sigs
+                })
+                return res.lastrowid or 0
+            else:
+                res = conn.execute(text("""
+                    INSERT INTO recipe_memory (
+                        channel_profile_id, channel_video_id, recipe_name, normalized_recipe_name,
+                        dish_category, cuisine, region, primary_ingredient, secondary_ingredients,
+                        cooking_method, flavor_profile, environment, signatures
+                    ) VALUES (
+                        :cid, :vid, :name, :norm, :dish, :cuisine, :region, :primary_ing,
+                        CAST(:secondary_ings AS jsonb), :method, :flavor, :env, CAST(:sigs AS jsonb)
+                    )
+                    ON CONFLICT(channel_profile_id, normalized_recipe_name) DO UPDATE SET
+                        recipe_name = EXCLUDED.recipe_name,
+                        dish_category = EXCLUDED.dish_category,
+                        cuisine = EXCLUDED.cuisine,
+                        region = EXCLUDED.region,
+                        primary_ingredient = EXCLUDED.primary_ingredient,
+                        secondary_ingredients = EXCLUDED.secondary_ingredients,
+                        cooking_method = EXCLUDED.cooking_method,
+                        flavor_profile = EXCLUDED.flavor_profile,
+                        environment = EXCLUDED.environment,
+                        signatures = EXCLUDED.signatures
+                    RETURNING id
+                """), {
+                    "cid": cid, "vid": vid, "name": name, "norm": norm, "dish": dish_category,
+                    "cuisine": cuisine, "region": region, "primary_ing": primary_ing,
+                    "secondary_ings": secondary_ings, "method": method, "flavor": flavor,
+                    "env": env, "sigs": sigs
+                })
+                row = res.first()
+                return row[0] if row else 0
+
+    def get_recipes(self, channel_profile_id: int) -> list[dict[str, Any]]:
+        self.initialize()
+        sql = "SELECT * FROM recipe_memory WHERE channel_profile_id = :cid ORDER BY created_at DESC"
+        with self.engine.begin() as conn:
+            rows = conn.execute(text(sql), {"cid": channel_profile_id}).mappings().all()
+        res = []
+        for r in rows:
+            d = dict(r)
+            d["secondary_ingredients"] = self._decode_json(d.get("secondary_ingredients"))
+            d["signatures"] = self._decode_json(d.get("signatures"))
+            res.append(d)
+        return res
+
+    def save_channel_dna(self, channel_profile_id: int, dna_profile: dict[str, Any], saturation_metrics: dict[str, Any] | None = None) -> None:
+        self.initialize()
+        dna_json = self._json(dna_profile)
+        sat_json = self._json(saturation_metrics or {})
+        with self.engine.begin() as conn:
+            if self.dialect == "sqlite":
+                conn.execute(text("""
+                    INSERT INTO channel_dna (channel_profile_id, dna_profile, saturation_metrics, updated_at)
+                    VALUES (:cid, :dna, :sat, CURRENT_TIMESTAMP)
+                    ON CONFLICT(channel_profile_id) DO UPDATE SET
+                        dna_profile = excluded.dna_profile,
+                        saturation_metrics = excluded.saturation_metrics,
+                        updated_at = CURRENT_TIMESTAMP
+                """), {"cid": channel_profile_id, "dna": dna_json, "sat": sat_json})
+            else:
+                conn.execute(text("""
+                    INSERT INTO channel_dna (channel_profile_id, dna_profile, saturation_metrics, updated_at)
+                    VALUES (:cid, CAST(:dna AS jsonb), CAST(:sat AS jsonb), now())
+                    ON CONFLICT(channel_profile_id) DO UPDATE SET
+                        dna_profile = EXCLUDED.dna_profile,
+                        saturation_metrics = EXCLUDED.saturation_metrics,
+                        updated_at = now()
+                """), {"cid": channel_profile_id, "dna": dna_json, "sat": sat_json})
+
+    def get_channel_dna(self, channel_profile_id: int) -> dict[str, Any] | None:
+        self.initialize()
+        with self.engine.begin() as conn:
+            row = conn.execute(text("SELECT * FROM channel_dna WHERE channel_profile_id = :cid"), {"cid": channel_profile_id}).mappings().first()
+        if not row:
+            return None
+        d = dict(row)
+        d["dna_profile"] = self._decode_json(d.get("dna_profile"))
+        d["saturation_metrics"] = self._decode_json(d.get("saturation_metrics"))
+        return d
+
+    def save_improvement_signal(self, channel_profile_id: int, signal: dict[str, Any]) -> None:
+        self.initialize()
+        area = signal.get("area") or "general"
+        obs = signal.get("observation") or ""
+        evidence = self._json(signal.get("evidence") or {})
+        rec = signal.get("recommendation") or ""
+        conf = float(signal.get("confidence", 1.0))
+        status = signal.get("status") or "active"
+        with self.engine.begin() as conn:
+            if self.dialect == "sqlite":
+                conn.execute(text("""
+                    INSERT INTO channel_improvement_memory (channel_profile_id, area, observation, evidence, recommendation, confidence, status)
+                    VALUES (:cid, :area, :obs, :evidence, :rec, :conf, :status)
+                """), {"cid": channel_profile_id, "area": area, "obs": obs, "evidence": evidence, "rec": rec, "conf": conf, "status": status})
+            else:
+                conn.execute(text("""
+                    INSERT INTO channel_improvement_memory (channel_profile_id, area, observation, evidence, recommendation, confidence, status)
+                    VALUES (:cid, :area, :obs, CAST(:evidence AS jsonb), :rec, :conf, :status)
+                """), {"cid": channel_profile_id, "area": area, "obs": obs, "evidence": evidence, "rec": rec, "conf": conf, "status": status})
+
+    def get_improvement_signals(self, channel_profile_id: int, active_only: bool = True) -> list[dict[str, Any]]:
+        self.initialize()
+        where = "WHERE channel_profile_id = :cid"
+        params: dict[str, Any] = {"cid": channel_profile_id}
+        if active_only:
+            where += " AND status = 'active'"
+        sql = f"SELECT * FROM channel_improvement_memory {where} ORDER BY created_at DESC"
+        with self.engine.begin() as conn:
+            rows = conn.execute(text(sql), params).mappings().all()
+        res = []
+        for r in rows:
+            d = dict(r)
+            d["evidence"] = self._decode_json(d.get("evidence"))
+            res.append(d)
+        return res
+
+    def save_video_performance(self, channel_video_id: int, performance: dict[str, Any]) -> None:
+        self.initialize()
+        views = int(performance.get("views", 0))
+        likes = int(performance.get("likes", 0))
+        comments = int(performance.get("comments", 0))
+        velocity = float(performance.get("velocity_score", 0.0))
+        with self.engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO video_performance_memory (channel_video_id, views, likes, comments, velocity_score)
+                VALUES (:vid, :views, :likes, :comments, :velocity)
+            """), {"vid": channel_video_id, "views": views, "likes": likes, "comments": comments, "velocity": velocity})
+
+    def get_channel_stats(self, channel_profile_id: int) -> dict[str, Any]:
+        self.initialize()
+        with self.engine.begin() as conn:
+            v_count = conn.execute(text("SELECT COUNT(*) FROM channel_videos WHERE channel_profile_id = :cid"), {"cid": channel_profile_id}).scalar() or 0
+            s_count = conn.execute(text("SELECT COUNT(*) FROM channel_videos WHERE channel_profile_id = :cid AND is_short = 1"), {"cid": channel_profile_id}).scalar() or 0
+            r_count = conn.execute(text("SELECT COUNT(*) FROM recipe_memory WHERE channel_profile_id = :cid"), {"cid": channel_profile_id}).scalar() or 0
+            has_dna = bool(conn.execute(text("SELECT 1 FROM channel_dna WHERE channel_profile_id = :cid LIMIT 1"), {"cid": channel_profile_id}).scalar())
+            profile = conn.execute(text("SELECT last_synced_at, title, handle, uploads_playlist_id FROM channel_profiles WHERE id = :cid"), {"cid": channel_profile_id}).mappings().first()
+
+        return {
+            "channel_profile_id": channel_profile_id,
+            "handle": profile["handle"] if profile else "",
+            "title": profile["title"] if profile else "",
+            "uploads_playlist_id": profile["uploads_playlist_id"] if profile else "",
+            "last_synced_at": str(profile["last_synced_at"]) if profile and profile["last_synced_at"] else None,
+            "video_count": v_count,
+            "shorts_count": s_count,
+            "recipe_count": r_count,
+            "has_dna": has_dna,
+        }
+
