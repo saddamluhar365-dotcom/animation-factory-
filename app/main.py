@@ -9,6 +9,7 @@ from .storage import load_config, save_config
 from .providers import register
 from .reference import analyze_reference, download_reference_url, save_reference_profile
 from .pipeline import run_project
+from .ui_dispatch import UiEventBridge
 
 PROVIDERS = [("Gemini", "gemini"), ("Hugging Face", "huggingface"), ("Tavily", "tavily")]
 
@@ -20,8 +21,21 @@ class App(tk.Tk):
         self.geometry("1050x720")
         self.minsize(900, 620)
         self.config_data = load_config()
+        self._ui_events = UiEventBridge()
+        self._reference_downloads: set[str] = set()
         self._build()
+        self.after(50, self._drain_ui_events)
         self.after(200, self.first_run)
+
+    def _drain_ui_events(self):
+        try:
+            self._ui_events.drain(limit=100)
+        finally:
+            if self.winfo_exists():
+                self.after(50, self._drain_ui_events)
+
+    def _post_ui(self, callback):
+        self._ui_events.post(callback)
 
     def _build(self):
         top = ttk.Frame(self, padding=12)
@@ -49,16 +63,14 @@ class App(tk.Tk):
         self.log.pack(fill="both", expand=True, pady=12)
 
     def write_log(self, msg):
-        self.after(
-            0,
-            lambda: (
-                self.status.set(msg),
-                self.log.configure(state="normal"),
-                self.log.insert("end", msg + "\n"),
-                self.log.see("end"),
-                self.log.configure(state="disabled"),
-            ),
-        )
+        def update():
+            self.status.set(msg)
+            self.log.configure(state="normal")
+            self.log.insert("end", msg + "\n")
+            self.log.see("end")
+            self.log.configure(state="disabled")
+
+        self._post_ui(update)
 
     def first_run(self):
         if not self.config_data.get("initialized"):
@@ -125,7 +137,7 @@ class App(tk.Tk):
                     if provider == "gemini":
                         messagebox.showerror("Gemini API test failed", msg)
 
-            self.after(0, done)
+            self._post_ui(done)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -163,6 +175,8 @@ class App(tk.Tk):
         url_entry = ttk.Entry(url_box)
         url_entry.pack(side="left", fill="x", expand=True, padx=8)
         files = []
+        count = ttk.Label(win, text="0 file(s) selected")
+        count.pack()
 
         def choose():
             selected = filedialog.askopenfilenames(
@@ -178,25 +192,30 @@ class App(tk.Tk):
             command=lambda: self._download_url(url_entry, count, files),
         ).pack(side="right")
         ttk.Button(win, text="Upload / Add Video Files", command=choose).pack(pady=10)
-        count = ttk.Label(win, text="0 file(s) selected")
-        count.pack()
         ttk.Button(win, text="ANALYZE REFERENCES", command=lambda: self._analyze_files(win, files)).pack(pady=20)
         ttk.Button(win, text="Skip for now", command=win.destroy).pack()
 
     def _download_url(self, entry, count, files):
         url = entry.get().strip()
-        if not url:
+        if not url or url in self._reference_downloads:
             return
+        self._reference_downloads.add(url)
         self.write_log("Downloading reference Short...")
 
         def work():
             try:
                 path = download_reference_url(url)
-                files.append(str(path))
-                self.after(0, lambda: count.config(text=f"{len(files)} file(s) selected"))
-                self.write_log(f"Downloaded {path.name}")
             except Exception as exc:
-                self.after(0, lambda: messagebox.showerror("Download failed", str(exc)))
+                self._post_ui(lambda exc=exc: messagebox.showerror("Download failed", str(exc)))
+            else:
+                def done():
+                    files.append(str(path))
+                    count.config(text=f"{len(files)} file(s) selected")
+                    self.write_log(f"Downloaded {path.name}")
+
+                self._post_ui(done)
+            finally:
+                self._reference_downloads.discard(url)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -205,12 +224,22 @@ class App(tk.Tk):
             messagebox.showwarning("References", "Add at least one reference Short.")
             return
         win.destroy()
-        results = []
-        for file_path in files:
-            self.write_log(f"Analyzing {Path(file_path).name}...")
-            results.append(analyze_reference(Path(file_path)))
-        save_reference_profile(results)
-        self.write_log("Reference profile saved. It will be reused on future generations.")
+        file_list = list(files)
+        self.write_log(f"Analyzing {len(file_list)} reference Short(s)...")
+
+        def work():
+            try:
+                results = []
+                for file_path in file_list:
+                    self.write_log(f"Analyzing {Path(file_path).name}...")
+                    results.append(analyze_reference(Path(file_path)))
+                save_reference_profile(results)
+            except Exception as exc:
+                self._post_ui(lambda exc=exc: messagebox.showerror("Reference analysis failed", str(exc)))
+            else:
+                self.write_log("Reference profile saved. It will be reused on future generations.")
+
+        threading.Thread(target=work, daemon=True).start()
 
     def generate(self):
         instruction = self.prompt.get("1.0", "end").strip()
@@ -222,9 +251,10 @@ class App(tk.Tk):
         def work():
             try:
                 out = run_project(instruction, duration, self.write_log)
-                self.after(0, lambda: messagebox.showinfo("Done", f"Video created:\n{out}"))
             except Exception as exc:
-                self.after(0, lambda: messagebox.showerror("Generation failed", str(exc)))
+                self._post_ui(lambda exc=exc: messagebox.showerror("Generation failed", str(exc)))
+            else:
+                self._post_ui(lambda out=out: messagebox.showinfo("Done", f"Video created:\n{out}"))
 
         threading.Thread(target=work, daemon=True).start()
 
