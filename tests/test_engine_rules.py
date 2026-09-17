@@ -12,10 +12,12 @@ def test_audio_timeline_is_sorted_and_bounded():
 
 
 def test_continuity_accepts_physical_action():
-    plan = ProjectPlan(5, "x", [ScenePlan(1, 0, 5, [SceneBeat(0, 2, "character picks up cup", "move")], "cup")])
+    beats = [SceneBeat(0, 1, "establish cup"), SceneBeat(1, 2, "character picks up cup"), SceneBeat(2, 5, "character holds cup")]
+    plan = ProjectPlan(5, "x", [ScenePlan(1, 0, 5, beats, "cup")])
     assert validate_plan_continuity(plan) == []
 
 
 def test_continuity_rejects_explicit_teleport_instruction():
-    plan = ProjectPlan(5, "x", [ScenePlan(1, 0, 5, [SceneBeat(0, 2, "cup teleports to table", "move")], "cup")])
+    beats = [SceneBeat(0, 1, "establish cup"), SceneBeat(1, 2, "cup teleports to table"), SceneBeat(2, 5, "hold")]
+    plan = ProjectPlan(5, "x", [ScenePlan(1, 0, 5, beats, "cup")])
     assert validate_plan_continuity(plan)
