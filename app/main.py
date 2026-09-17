@@ -418,11 +418,12 @@ class App(tk.Tk):
             stats = db.get_channel_stats(p["id"])
             dna_status = "Available" if stats["has_dna"] else "Pending"
             last_sync = stats["last_synced_at"] or "Never"
+            analyzed_count = stats.get("analyzed_shorts_count", 0)
             stats_var.set(
                 f"Channel: {stats['title']} ({stats['handle']})\n"
                 f"Uploads Playlist: {stats['uploads_playlist_id'] or 'N/A'}\n"
-                f"Videos: {stats['video_count']} | Shorts: {stats['shorts_count']} | Recipes in Memory: {stats['recipe_count']}\n"
-                f"Channel DNA: {dna_status} | Last Synced: {last_sync}"
+                f"Videos: {stats['video_count']} | Shorts: {stats['shorts_count']} | Deep Analyzed: {analyzed_count}/10 | Recipes: {stats['recipe_count']}\n"
+                f"Channel DNA: {dna_status} (10 Facets) | Last Synced: {last_sync}"
             )
 
         refresh_stats()
@@ -506,39 +507,60 @@ class App(tk.Tk):
 
             threading.Thread(target=work, daemon=True).start()
 
-        def analyze_now():
+        def deep_analyze_10():
             p = db.get_channel_profile()
             if not p:
                 messagebox.showwarning("Channel", "Connect a channel first.")
                 return
-            self.write_log(f"Extracting recipes & computing Channel DNA for {p['handle']}...")
+            self.write_log(f"Downloading & deeply decoding latest 10 Shorts for {p['handle']}...")
 
             def work():
                 try:
-                    from core.channel.recipe_extractor import RecipeExtractor
-                    from core.channel.dna import ChannelDNAEngine
-                    from core.channel.improvement import ImprovementEngine
-
-                    extractor = RecipeExtractor(db)
-                    videos = db.get_unextracted_channel_videos(p["id"])
-                    for v in videos:
-                        extractor.extract_and_save(p["id"], v)
-
-                    dna_engine = ChannelDNAEngine(db)
-                    dna_res = dna_engine.generate_dna(p["id"])
-
-                    imp_engine = ImprovementEngine(db)
-                    imp_engine.generate_recommendations(p["id"])
-
+                    from core.channel.deep_analyzer import ChannelDeepAnalyzer
+                    analyzer = ChannelDeepAnalyzer(db)
+                    res = analyzer.analyze_latest_shorts(p["id"], max_videos=10, status_cb=self.write_log)
                     def done():
                         refresh_stats()
-                        self.write_log(f"Channel DNA and recipes analyzed for {p['handle']}.")
-                        messagebox.showinfo("Analysis Complete", f"Recipes analyzed: {dna_res.dna_profile.get('total_recipes_analyzed', 0)}\nChannel DNA updated.")
+                        self.write_log(f"Deep decode completed: {res.get('analyzed_count')} Shorts analyzed and Channel DNA updated in PostgreSQL.")
+                        messagebox.showinfo(
+                            "Deep Analysis Complete",
+                            f"Successfully analyzed {res.get('analyzed_count')} Shorts.\n"
+                            f"Permanent 10-facet Channel DNA saved in PostgreSQL."
+                        )
                     self._post_ui(done)
                 except Exception as exc:
-                    self._post_ui(lambda e=str(exc): messagebox.showerror("Analysis failed", e))
+                    self._post_ui(lambda e=str(exc): messagebox.showerror("Deep analysis failed", e))
 
             threading.Thread(target=work, daemon=True).start()
+
+        def view_dna():
+            p = db.get_channel_profile()
+            if not p:
+                messagebox.showwarning("Channel", "Connect a channel first.")
+                return
+            cdna = db.get_channel_dna(p["id"])
+            if not cdna or not cdna.get("dna_profile"):
+                messagebox.showinfo("Channel DNA", "Channel DNA is not computed yet. Click 'DEEP ANALYZE LATEST 10 SHORTS'.")
+                return
+            prof = cdna.get("dna_profile", {})
+            style = prof.get("winning_style_dna", {}).get("signature", "Ready")
+            cuisine = prof.get("dominant_cuisine", "Fusion")
+            fps_val = prof.get("animation_dna", {}).get("target_fps", 60.0)
+            pacing_txt = prof.get("pacing", "N/A")
+            rules = "\n".join([f"  • {r}" for r in prof.get("quality_rules", [])[:4]])
+            avoids = "\n".join([f"  • {a}" for a in prof.get("avoid_bad_patterns", [])[:4]])
+
+            info_text = (
+                f"CHANNEL DNA (10 Facets)\n"
+                f"=====================================\n"
+                f"• Winning Style: {style}\n"
+                f"• Dominant Cuisine: {cuisine}\n"
+                f"• Target Framerate: {fps_val} FPS (Cubic Easing)\n"
+                f"• Pacing: {pacing_txt}\n\n"
+                f"Quality Rules:\n{rules}\n\n"
+                f"Avoid Patterns:\n{avoids}\n"
+            )
+            messagebox.showinfo("Channel DNA (PostgreSQL)", info_text)
 
         def view_recipes():
             p = db.get_channel_profile()
@@ -547,7 +569,7 @@ class App(tk.Tk):
                 return
             recs = db.get_recipes(p["id"])
             if not recs:
-                messagebox.showinfo("Recipe Memory", "No recipes currently extracted. Click 'ANALYZE CHANNEL'.")
+                messagebox.showinfo("Recipe Memory", "No recipes currently extracted. Click 'DEEP ANALYZE LATEST 10 SHORTS'.")
                 return
             lines = [f"• {r['recipe_name']} ({r.get('cuisine', '')} - {r.get('primary_ingredient', '')})" for r in recs[:20]]
             messagebox.showinfo("Recipe Memory (Top 20)", "\n".join(lines))
@@ -559,17 +581,18 @@ class App(tk.Tk):
                 return
             signals = db.get_improvement_signals(p["id"])
             if not signals:
-                messagebox.showinfo("Improvement Signals", "No signals recorded yet. Click 'ANALYZE CHANNEL'.")
+                messagebox.showinfo("Improvement Signals", "No signals recorded yet. Click 'DEEP ANALYZE LATEST 10 SHORTS'.")
                 return
             lines = [f"[{s['area'].upper()}] {s['recommendation']}" for s in signals[:5]]
             messagebox.showinfo("Improvement Signals", "\n\n".join(lines))
 
         act_btn_row = ttk.Frame(actions_frame)
         act_btn_row.pack(fill="x", pady=4)
-        ttk.Button(act_btn_row, text="SYNC NOW", command=sync_now).pack(side="left", padx=5)
-        ttk.Button(act_btn_row, text="ANALYZE CHANNEL", command=analyze_now).pack(side="left", padx=5)
-        ttk.Button(act_btn_row, text="VIEW RECIPE MEMORY", command=view_recipes).pack(side="left", padx=5)
-        ttk.Button(act_btn_row, text="VIEW IMPROVEMENTS", command=view_signals).pack(side="left", padx=5)
+        ttk.Button(act_btn_row, text="SYNC NOW", command=sync_now).pack(side="left", padx=4)
+        ttk.Button(act_btn_row, text="DEEP ANALYZE LATEST 10 SHORTS", command=deep_analyze_10).pack(side="left", padx=4)
+        ttk.Button(act_btn_row, text="VIEW CHANNEL DNA", command=view_dna).pack(side="left", padx=4)
+        ttk.Button(act_btn_row, text="RECIPE MEMORY", command=view_recipes).pack(side="left", padx=4)
+        ttk.Button(act_btn_row, text="IMPROVEMENTS", command=view_signals).pack(side="left", padx=4)
 
         ttk.Button(win, text="CLOSE", command=win.destroy).pack(pady=15)
 
@@ -579,7 +602,10 @@ class App(tk.Tk):
         active_prof = db.get_channel_profile()
 
         if not instruction and not active_prof:
-            messagebox.showwarning("Prompt", "Describe the Short first, or connect a YouTube Channel in Channel Intelligence.")
+            messagebox.showwarning(
+                "Channel Required",
+                "A YouTube channel handle is required. Please open Settings → Channel Intelligence and connect your @channel_handle.",
+            )
             return
 
         duration = int(self.duration.get())

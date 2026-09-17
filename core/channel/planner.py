@@ -85,11 +85,26 @@ class ChannelAwarePlanner:
 
         if prompt and prompt.strip():
             chosen_title = prompt.strip()
+            # Extract structured culinary signals from user prompt
+            from core.channel.recipe_extractor import RecipeExtractor
+            extractor = RecipeExtractor(self.db)
+            extracted = extractor.extract({"title": chosen_title})
             recipe_concept = {
                 "recipe_name": chosen_title,
-                "primary_ingredient": "mixed",
-                "cooking_method": "saute & sizzle",
+                "normalized_recipe_name": extracted.normalized_recipe_name or chosen_title.lower(),
+                "primary_ingredient": extracted.primary_ingredient or "mixed",
+                "secondary_ingredients": extracted.secondary_ingredients,
+                "cooking_method": extracted.cooking_method or "saute & sizzle",
+                "dish_category": extracted.dish_category,
+                "cuisine": extracted.cuisine,
             }
+
+            # Quality Check: Reject generic/low-quality single-word or vague inputs
+            low_quality_triggers = {"food", "short", "cook", "cooking", "something", "video", "tasty food", "make food", "recipe"}
+            if chosen_title.lower().strip() in low_quality_triggers or len(chosen_title.strip().split()) < 2:
+                status_cb(f"Channel Intelligence: Low-quality/generic concept '{chosen_title}' detected. Upgrading with channel culinary DNA...")
+                recipe_concept = self.gap_engine.pick_novel_concept(prof_obj.id if prof_obj else None)
+                chosen_title = recipe_concept.get("recipe_name", "Artisanal Sizzling Garlic Butter Crunch")
         elif prof_obj and prof_obj.id:
             # Mode C: Channel only! Query content gaps & pick novel recipe
             status_cb("Channel Intelligence: Analyzing content gaps and novelty memory...")
@@ -104,7 +119,7 @@ class ChannelAwarePlanner:
                 "cooking_method": "deep fry",
             }
 
-        # 3. Novelty Engine Check (Hard no-repeat rule)
+        # 3. Novelty Engine Check (Hard no-repeat rule against Recipe Memory & Channel DNA)
         novelty_verdict = None
         if prof_obj and prof_obj.id:
             novelty_verdict = self.novelty_engine.evaluate(prof_obj.id, recipe_concept)
@@ -137,7 +152,7 @@ class ChannelAwarePlanner:
         if improvement_signals:
             ref_profile["improvement_signals"] = [s.get("recommendation", "") for s in improvement_signals[:3]]
 
-        # 5. Build Scenes with physical continuity & ASMR audio timeline
+        # 5. Build Scenes with physical continuity & ASMR audio timeline enforcing Channel DNA
         plan = self._synthesize_project_plan(
             title=chosen_title,
             duration=duration,
@@ -186,10 +201,40 @@ class ChannelAwarePlanner:
         method = concept.get("method") or concept.get("cooking_method") or "sizzle"
         flavor = concept.get("flavor") or "savory herb"
 
+        # Extract Channel DNA facets if available
+        channel_dna_data: dict[str, Any] = {}
+        if channel_profile and channel_profile.id:
+            dna_row = self.db.get_channel_dna(channel_profile.id)
+            if dna_row:
+                channel_dna_data = dna_row.get("dna_profile") or {}
+            else:
+                cdna = self.dna_engine.generate_dna(channel_profile.id)
+                channel_dna_data = cdna.dna_profile
+
+        vis_dna = channel_dna_data.get("visual_dna") or {}
+        anim_dna = channel_dna_data.get("animation_dna") or {}
+        lighting = vis_dna.get("lighting") or "warm directional macro spotlight with soft rim fill"
+        palette = vis_dna.get("palette") or "warm golden amber, rich culinary wood tones"
+        anchors = vis_dna.get("consistency_anchors") or [
+            f"consistent {lighting}",
+            "consistent chef hands in natural culinary technique with neutral sleeves",
+            "consistent solid dark cutting board and matte cookware",
+            "consistent shallow depth of field with creamy background bokeh",
+            "photorealistic 8k vertical 9:16 framing, no text, no watermark",
+        ]
+        camera_motions = anim_dna.get("camera_motion_profiles") or [
+            "macro_push_in",
+            "cinematic_drift",
+            "dynamic_tilt",
+            "reveal_pull_out",
+            "parallax_shimmer",
+        ]
+
         for i, span in enumerate(durations, 1):
             end = cursor + span
-            # 4 distinct, physical beats per scene
             beats: list[SceneBeat] = []
+            cam_motion = camera_motions[(i - 1) % len(camera_motions)]
+
             if i == 1:
                 actions = [
                     f"immediate vertical macro reveal of fresh {primary_ing}",
@@ -204,7 +249,7 @@ class ChannelAwarePlanner:
                 ]
             elif i == count:
                 actions = [
-                    f"final plated presentation of {title} in warm natural light",
+                    f"final plated presentation of {title} in {lighting}",
                     "chef garnishes plate with fresh herbs and delicate drizzle",
                     "hand lifts first crispy bite revealing steaming interior texture",
                     "hold on irresistible macro food climax",
@@ -218,7 +263,7 @@ class ChannelAwarePlanner:
                 actions = [
                     f"heat pan and add seasoned {primary_ing}",
                     f"active {method} action creating golden sizzling crust",
-                    f"seasoning with aromatic spices, smoke and steam rising naturally",
+                    "seasoning with aromatic spices, smoke and steam rising naturally",
                     "toss pan gently maintaining continuous utensil contact",
                 ]
                 scene_type = f"Active Culinary Action ({method})"
@@ -230,13 +275,14 @@ class ChannelAwarePlanner:
             for b_idx, act in enumerate(actions):
                 bs = cursor + span * b_idx / len(actions)
                 be = cursor + span * (b_idx + 1) / len(actions)
-                camera = "slow cinematic push-in" if b_idx == 0 else "shallow depth-of-field macro focus"
+                camera = cam_motion if b_idx == 0 else "shallow depth-of-field macro focus"
                 beats.append(SceneBeat(round(bs, 3), round(be, 3), act, camera))
 
             v_prompt = (
                 f"Cinematic vertical 9:16 culinary Short scene {i} of {count} for '{title}'; "
                 f"{scene_type}; active physical interaction with {primary_ing}; "
-                f"warm natural food lighting with golden highlights; macro texture focus; "
+                f"{lighting}; {palette}; macro texture focus; "
+                f"{', '.join(anchors[:3])}; "
                 "continuous object presence without teleportation; no text, no subtitles, no watermark, no dialogue"
             )
 
@@ -245,15 +291,21 @@ class ChannelAwarePlanner:
                 "no_teleportation": True,
                 "primary_ingredient": primary_ing,
                 "scene_type": scene_type,
+                "consistency_anchors": anchors,
             }
 
             scenes.append(ScenePlan(i, round(cursor, 3), round(end, 3), beats, v_prompt, audio_events, continuity))
             cursor = end
 
+        # Attach Channel DNA into style
+        style_copy = dict(reference_profile)
+        if channel_dna_data:
+            style_copy["channel_dna"] = channel_dna_data
+
         return ProjectPlan(
             duration=duration,
             title=title,
             scenes=scenes,
-            style=reference_profile,
+            style=style_copy,
             character={"type": "chef_hands", "visual_continuity": True},
         )

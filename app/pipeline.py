@@ -299,7 +299,17 @@ def run_project(
             cfg = load_config()
             manual_ref = cfg.get("reference_profile")
 
+            if not (instruction or "").strip() and not active_channel:
+                raise RuntimeError(
+                    "A YouTube channel handle is required. Please go to Settings → Channel Intelligence and connect your @channel_handle."
+                )
+
             if active_channel or not (instruction or "").strip():
+                # Ensure Channel DNA is initialized if missing
+                if active_channel and not db.get_channel_dna(active_channel["id"]):
+                    from core.channel.dna import ChannelDNAEngine
+                    ChannelDNAEngine(db).generate_dna(active_channel["id"])
+
                 from core.channel.planner import ChannelAwarePlanner
                 channel_planner = ChannelAwarePlanner(db)
                 plan = channel_planner.create_plan(
