@@ -3,11 +3,24 @@ import re
 from core.contracts import ProjectPlan
 
 _FORBIDDEN = re.compile(r"\b(teleport(?:s|ed|ing)?|magically appears?|disappears? without|duplicates?|floats? without|morphs?|changes shape instantly|cuts to a different object)\b", re.I)
-_ACTIONS = ("pick up", "picks up", "place", "places", "carry", "carries", "open", "opens", "close", "closes", "pour", "pours", "cut", "cuts", "mix", "mixes", "hang", "hangs", "lift", "lifts")
+
+
+def validate_state_transition(previous: dict, current: dict) -> list[str]:
+    errors = []
+    before = previous.get("objects", {})
+    after = current.get("objects", {})
+    for name in before:
+        if name not in after:
+            errors.append(f"object disappeared: {name}")
+        elif isinstance(before[name], dict) and isinstance(after[name], dict):
+            for key in ("size", "shape", "identity"):
+                if key in before[name] and key in after[name] and before[name][key] != after[name][key]:
+                    errors.append(f"object changed {key}: {name}")
+    return errors
 
 
 def validate_plan_continuity(plan: ProjectPlan) -> list[str]:
-    errors: list[str] = []
+    errors = []
     if not plan.scenes:
         return ["plan has no scenes"]
     cursor = 0.0
@@ -16,18 +29,14 @@ def validate_plan_continuity(plan: ProjectPlan) -> list[str]:
             errors.append(f"scene {scene.index}: gap/overlap at {scene.start:.3f}s")
         if scene.end <= scene.start:
             errors.append(f"scene {scene.index}: invalid time range")
-        if len(scene.beats) < 3 or len(scene.beats) > 5:
+        if not 3 <= len(scene.beats) <= 5:
             errors.append(f"scene {scene.index}: must have 3-5 beats")
         previous = scene.start
         for beat in scene.beats:
             if beat.start < scene.start - 0.01 or beat.end > scene.end + 0.01 or beat.start < previous - 0.01:
                 errors.append(f"scene {scene.index}: beat timing is outside scene")
-            text = beat.action + " " + scene.visual_prompt
-            if _FORBIDDEN.search(text):
+            if _FORBIDDEN.search(beat.action + " " + scene.visual_prompt):
                 errors.append(f"scene {scene.index}: non-physical object transition detected")
-            if any(action in beat.action.lower() for action in _ACTIONS) and not scene.continuity:
-                # Physical actions remain valid; the prompt is hardened by the planner.
-                pass
             previous = beat.end
         cursor = scene.end
     if abs(cursor - plan.duration) > 0.01:
