@@ -61,8 +61,24 @@ class App(tk.Tk):
         ttk.Button(row, text="Reference Shorts", command=self.reference_setup).pack(side="left")
         ttk.Button(row, text="Channel Intelligence", command=self.channel_setup).pack(side="left", padx=8)
 
-        self.log = tk.Text(main, height=16, state="disabled")
-        self.log.pack(fill="both", expand=True, pady=12)
+        mode_frame = ttk.LabelFrame(main, text="Video Provider", padding=(10, 6))
+        mode_frame.pack(fill="x", pady=6)
+        self.video_provider = tk.StringVar(value="image_animation")
+        ttk.Radiobutton(
+            mode_frame,
+            text="Image → Animation (Hugging Face Image + 60 FPS FFmpeg Animation)",
+            variable=self.video_provider,
+            value="image_animation",
+        ).pack(side="left", padx=10)
+        ttk.Radiobutton(
+            mode_frame,
+            text="FAL Video (FAL Multi-Key Healthy Pool & Dynamic Video Models)",
+            variable=self.video_provider,
+            value="fal_video",
+        ).pack(side="left", padx=10)
+
+        self.log = tk.Text(main, height=14, state="disabled")
+        self.log.pack(fill="both", expand=True, pady=10)
 
     def write_log(self, msg):
         def update():
@@ -96,7 +112,7 @@ class App(tk.Tk):
 
         for provider, label in PROVIDERS:
             box = ttk.LabelFrame(frame, text=provider, padding=10)
-            box.pack(fill="x", pady=7)
+            box.pack(fill="x", pady=5)
             e = ttk.Entry(box, show="*", width=55)
             e.pack(side="left", fill="x", expand=True)
             result = ttk.Label(box, text=f"{len(load_config().get('apis', {}).get(label, []))} saved")
@@ -107,16 +123,113 @@ class App(tk.Tk):
                 command=lambda p=label, e=e, r=result: self.test_api(p, e, r),
             ).pack(side="right")
 
+        # Dedicated FAL Video API Pool Management
+        fal_box = ttk.LabelFrame(frame, text="FAL Video API Pool (Unlimited Keys, Healthy Pool)", padding=10)
+        fal_box.pack(fill="both", expand=True, pady=8)
+
+        fal_input_row = ttk.Frame(fal_box)
+        fal_input_row.pack(fill="x", pady=4)
+        ttk.Label(fal_input_row, text="Add FAL Key:").pack(side="left", padx=4)
+        fal_entry = ttk.Entry(fal_input_row, show="*", width=42)
+        fal_entry.pack(side="left", fill="x", expand=True, padx=4)
+        fal_add_lbl = ttk.Label(fal_input_row, text="")
+        fal_add_lbl.pack(side="left", padx=6)
+        ttk.Button(
+            fal_input_row,
+            text="TEST & ADD",
+            command=lambda: self.test_and_add_fal_key(fal_entry, fal_add_lbl, refresh_fal_list),
+        ).pack(side="right")
+
+        fal_keys_container = ttk.Frame(fal_box)
+        fal_keys_container.pack(fill="both", expand=True, pady=4)
+
+        def refresh_fal_list():
+            for child in fal_keys_container.winfo_children():
+                child.destroy()
+            from app.storage import get_keys_metadata, remove_key, toggle_key
+            metadata = get_keys_metadata("fal")
+            if not metadata:
+                ttk.Label(
+                    fal_keys_container,
+                    text="No FAL keys configured. Add keys above to use FAL Video mode.",
+                    font=("Segoe UI", 9, "italic"),
+                ).pack(pady=4)
+                return
+
+            for item in metadata:
+                row = ttk.Frame(fal_keys_container)
+                row.pack(fill="x", pady=2)
+                status_txt = "✓ Active" if item.get("status") == "active" and item.get("enabled") else f"[{item.get('status').upper()}]"
+                ttk.Label(row, text=f"{item.get('label')}: {item.get('masked')}", width=36, anchor="w").pack(side="left", padx=4)
+                ttk.Label(row, text=status_txt, width=14, anchor="w").pack(side="left", padx=4)
+
+                raw_k = item.get("raw_key")
+                ttk.Button(row, text="Test", width=6, command=lambda k=raw_k: self.test_single_fal_key(k, refresh_fal_list)).pack(side="left", padx=2)
+                toggle_txt = "Disable" if item.get("enabled") else "Enable"
+                new_state = not item.get("enabled")
+                ttk.Button(row, text=toggle_txt, width=8, command=lambda k=raw_k, s=new_state: (toggle_key("fal", k, s), refresh_fal_list())).pack(side="left", padx=2)
+                ttk.Button(row, text="Remove", width=8, command=lambda k=raw_k: (remove_key("fal", k), refresh_fal_list())).pack(side="left", padx=2)
+
+        refresh_fal_list()
+
         ttk.Label(
             win,
-            text="First launch needs one working Gemini, Hugging Face and Tavily key. Settings can add more later.",
+            text="Required for launch: Gemini, Hugging Face, Tavily. FAL Video keys are optional for high-production mode.",
         ).pack(pady=6)
         btn_frame = ttk.Frame(win)
-        btn_frame.pack(pady=12)
+        btn_frame.pack(pady=10)
         ttk.Button(btn_frame, text="Channel Intelligence", command=self.channel_setup).pack(side="left", padx=8)
         ttk.Button(btn_frame, text="SAVE / CONTINUE", command=lambda: self.close_setup(win, first)).pack(side="left", padx=8)
         if first:
             win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+    def test_and_add_fal_key(self, entry, status_lbl, refresh_cb):
+        key = entry.get().strip()
+        if not key:
+            status_lbl.config(text="Enter key")
+            return
+        status_lbl.config(text="Testing...")
+
+        def work():
+            from app.providers import test_fal
+            from app.storage import add_key
+            ok, msg = test_fal(key)
+            if ok:
+                add_key("fal", key)
+
+            def done():
+                try:
+                    if status_lbl.winfo_exists():
+                        status_lbl.config(text="✓ Added" if ok else "✗ Failed")
+                    if ok:
+                        entry.delete(0, "end")
+                        refresh_cb()
+                        self.write_log(f"FAL Key verified & added: {msg}")
+                    else:
+                        self.write_log(f"FAL Key verification failed: {msg}")
+                        messagebox.showerror("FAL Key verification failed", msg)
+                except Exception:
+                    pass
+
+            self._post_ui(done)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def test_single_fal_key(self, raw_key, refresh_cb):
+        def work():
+            from app.providers import test_fal
+            from app.storage import update_key_status
+            ok, msg = test_fal(raw_key)
+            update_key_status("fal", raw_key, "active" if ok else "invalid")
+
+            def done():
+                refresh_cb()
+                self.write_log(f"FAL Key health check: {'PASSED' if ok else 'FAILED'} - {msg}")
+
+            self._post_ui(done)
+
+        threading.Thread(target=work, daemon=True).start()
+
 
     def test_api(self, provider, entry, result):
         key = entry.get().strip()
@@ -473,7 +586,8 @@ class App(tk.Tk):
 
         def work():
             try:
-                out = run_project(instruction, duration, self.write_log)
+                provider = self.video_provider.get() if hasattr(self, "video_provider") else "image_animation"
+                out = run_project(instruction, duration, self.write_log, video_provider=provider)
             except Exception as exc:
                 error_message = str(exc)
                 self._post_ui(lambda error_message=error_message: messagebox.showerror("Generation failed", error_message))
