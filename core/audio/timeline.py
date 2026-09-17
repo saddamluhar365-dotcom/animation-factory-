@@ -29,14 +29,19 @@ class AudioTimeline:
         return event
 
     def validate(self) -> list[str]:
-        errors = []
-        for event in self.events:
-            if event.end > self.duration + 0.001:
-                errors.append(f"audio event {event.name} exceeds duration")
-        for a, b in zip(self.events, self.events[1:]):
-            if a.kind == "music" and b.kind == "music" and b.start < a.end:
-                errors.append("overlapping music events")
-        return errors
+        return validate_events(self.events, self.duration)
 
     def to_dict(self) -> dict:
         return {"duration": self.duration, "events": [e.__dict__ for e in self.events]}
+
+
+def validate_events(events: list[AudioEvent], duration: float) -> list[str]:
+    errors = []
+    for event in events:
+        if event.start < 0 or event.end <= event.start or event.end > duration + 0.001:
+            errors.append(f"invalid audio event: {event.name}")
+    music = [e for e in events if e.kind == "music"]
+    for a, b in zip(sorted(music), sorted(music)[1:]):
+        if b.start < a.end:
+            errors.append("overlapping music events")
+    return errors
