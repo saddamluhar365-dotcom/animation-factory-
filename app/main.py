@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from .storage import load_config, save_config
 from .providers import register
-from .reference import analyze_reference, save_reference_profile
+from .reference import analyze_reference, download_reference_url, save_reference_profile
 from .pipeline import run_project
 
 PROVIDERS = [("Gemini","gemini"),("Hugging Face","huggingface"),("Tavily","tavily")]
@@ -48,7 +48,7 @@ class App(tk.Tk):
             result=ttk.Label(box,text=f"{len(load_config().get('apis',{}).get(label,[]))} saved")
             result.pack(side="left",padx=8)
             ttk.Button(box,text="TEST & ADD",command=lambda p=label,e=e,r=result:self.test_api(p,e,r)).pack(side="right")
-        ttk.Label(win,text="Required on first launch: one working Gemini, Hugging Face and Tavily key. Optional providers can be added later.").pack(pady=6)
+        ttk.Label(win,text="First launch needs one working Gemini, Hugging Face and Tavily key. Settings can add more later.").pack(pady=6)
         ttk.Button(win,text="SAVE / CONTINUE",command=lambda:self.close_setup(win,first)).pack(pady=12)
         if first: win.protocol("WM_DELETE_WINDOW",lambda:None)
 
@@ -70,17 +70,38 @@ class App(tk.Tk):
         if first and missing:
             messagebox.showwarning("Required APIs", "Add at least one working key for: "+", ".join(missing)); return
         if first:
-            cfg["initialized"]=True; save_config(cfg); win.destroy(); self.write_log("Initial APIs configured.")
-            self.after(300,self.reference_setup)
+            cfg["initialized"]=True; save_config(cfg); win.destroy(); self.write_log("Initial APIs configured."); self.after(300,self.reference_setup)
         else:
             win.destroy(); self.write_log("API configuration saved.")
 
     def reference_setup(self):
-        files=filedialog.askopenfilenames(title="Select reference Shorts",filetypes=[("Video","*.mp4 *.mov *.mkv *.webm"),("All","*.*")])
-        if not files:
-            if not load_config().get("reference_profile"): messagebox.showinfo("Reference Shorts","Add reference Shorts now or use the Reference Shorts button later.")
-            return
-        results=[]
+        win=tk.Toplevel(self); win.title("Reference Shorts"); win.geometry("720x430"); win.transient(self); win.grab_set()
+        ttk.Label(win,text="Reference Shorts — first-time style setup",font=("Segoe UI",15,"bold")).pack(pady=12)
+        ttk.Label(win,text="Paste Shorts links or upload downloaded Shorts. They are analyzed once and saved as a style profile.").pack(pady=4)
+        url_box=ttk.Frame(win,padding=12); url_box.pack(fill="x")
+        ttk.Label(url_box,text="Shorts URL:").pack(side="left"); url_entry=ttk.Entry(url_box); url_entry.pack(side="left",fill="x",expand=True,padx=8)
+        files=[]
+        def choose():
+            selected=filedialog.askopenfilenames(title="Select reference Shorts",filetypes=[("Video","*.mp4 *.mov *.mkv *.webm"),("All","*.*")]); files.extend(selected); count.config(text=f"{len(files)} file(s) selected")
+        ttk.Button(url_box,text="Add URL",command=lambda:self._download_url(url_entry,count,files)).pack(side="right")
+        ttk.Button(win,text="Upload / Add Video Files",command=choose).pack(pady=10)
+        count=ttk.Label(win,text="0 file(s) selected"); count.pack()
+        ttk.Button(win,text="ANALYZE REFERENCES",command=lambda:self._analyze_files(win,files)).pack(pady=20)
+        ttk.Button(win,text="Skip for now",command=win.destroy).pack()
+
+    def _download_url(self,entry,count,files):
+        url=entry.get().strip()
+        if not url: return
+        self.write_log("Downloading reference Short...")
+        def work():
+            try:
+                path=download_reference_url(url); files.append(str(path)); self.after(0,lambda:count.config(text=f"{len(files)} file(s) selected")); self.write_log(f"Downloaded {path.name}")
+            except Exception as exc: self.after(0,lambda:messagebox.showerror("Download failed",str(exc)))
+        threading.Thread(target=work,daemon=True).start()
+
+    def _analyze_files(self,win,files):
+        if not files: messagebox.showwarning("References","Add at least one reference Short."); return
+        win.destroy(); results=[]
         for f in files:
             self.write_log(f"Analyzing {Path(f).name}..."); results.append(analyze_reference(Path(f)))
         save_reference_profile(results); self.write_log("Reference profile saved. It will be reused on future generations.")
