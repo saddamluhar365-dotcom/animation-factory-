@@ -163,14 +163,28 @@ def test_gemini(key: str) -> tuple[bool, str]:
 
 def test_hf(key: str) -> tuple[bool, str]:
     url = "https://huggingface.co/api/whoami-v2"
-    r = requests.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=TIMEOUT)
-    return r.ok, r.text[:300]
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=TIMEOUT)
+        if r.ok:
+            try:
+                name = r.json().get("name") or "user"
+                return True, f"Hugging Face token verified for @{name}"
+            except Exception:
+                return True, "Hugging Face token verified successfully"
+        return False, _format_http_error(r)
+    except requests.RequestException as exc:
+        return False, f"Network error: {exc}"
 
 
 def test_tavily(key: str) -> tuple[bool, str]:
     url = "https://api.tavily.com/search"
-    r = requests.post(url, json={"api_key": key, "query": "test", "max_results": 1}, timeout=TIMEOUT)
-    return r.ok, r.text[:300]
+    try:
+        r = requests.post(url, json={"api_key": key, "query": "test", "max_results": 1}, timeout=TIMEOUT)
+        if r.ok:
+            return True, "Tavily search API verified successfully"
+        return False, _format_http_error(r)
+    except requests.RequestException as exc:
+        return False, f"Network error: {exc}"
 
 
 def register(provider: str, key: str) -> tuple[bool, str]:
@@ -231,10 +245,12 @@ def hf_text_to_image(prompt: str, model: str = "black-forest-labs/FLUX.1-schnell
             r = requests.post(url, headers={"Authorization": f"Bearer {key}"}, json={"inputs": prompt}, timeout=180)
             if r.ok and r.headers.get("content-type", "").startswith("image/"):
                 return r.content
-            last = r.text[:500]
+            last = _format_http_error(r)
+        except requests.RequestException as exc:
+            last = f"Network error: {exc}"
         except Exception as exc:
             last = str(exc)
-    raise RuntimeError(last)
+    raise RuntimeError(f"Hugging Face image generation failed: {last}")
 
 
 def tavily_search(query: str) -> list[dict]:

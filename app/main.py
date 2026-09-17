@@ -128,11 +128,22 @@ class App(tk.Tk):
                 ok, msg = False, str(exc)
 
             def done():
+                try:
+                    exists = result.winfo_exists()
+                except Exception:
+                    exists = False
+                if exists:
+                    if ok:
+                        result.config(text=f"✓ LIVE ({len(load_config().get('apis', {}).get(provider, []))})")
+                        try:
+                            entry.delete(0, "end")
+                        except Exception:
+                            pass
+                    else:
+                        result.config(text="✗ FAILED")
                 if ok:
-                    result.config(text=f"✓ LIVE ({len(load_config().get('apis', {}).get(provider, []))})")
                     self.write_log(f"{provider}: LIVE and auto-added — {msg}")
                 else:
-                    result.config(text="✗ FAILED")
                     self.write_log(f"{provider}: FAILED — {msg}")
                     if provider == "gemini":
                         messagebox.showerror("Gemini API test failed", msg)
@@ -211,7 +222,11 @@ class App(tk.Tk):
             else:
                 def done():
                     files.append(str(path))
-                    count.config(text=f"{len(files)} file(s) selected")
+                    try:
+                        if count.winfo_exists():
+                            count.config(text=f"{len(files)} file(s) selected")
+                    except Exception:
+                        pass
                     self.write_log(f"Downloaded {path.name}")
 
                 self._post_ui(done)
