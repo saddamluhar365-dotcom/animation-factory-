@@ -27,8 +27,8 @@ class ScenePlan:
     def __post_init__(self):
         if self.end <= self.start:
             raise ValueError("Scene timestamps must be increasing")
-        if not 3 <= len(self.beats) <= 5:
-            raise ValueError("Every scene must contain 3-5 visual beats")
+        if not self.beats:
+            raise ValueError("Scene must contain at least one visual beat")
 
     def to_dict(self) -> dict:
         return asdict(self)
