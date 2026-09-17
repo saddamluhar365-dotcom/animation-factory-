@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 from .providers import gemini_text, hf_text_to_image
 from .storage import load_config
 from core.audio.timeline import AudioEvent, AudioTimeline
+from core.cleanup import cleanup_project_artifacts
 from core.continuity.validator import validate_plan_continuity
 from core.contracts import ProjectPlan, SceneBeat, ScenePlan
 from core.duration import distribute_duration, scene_count, validate_duration
@@ -86,7 +87,6 @@ def make_plan(instruction: str, duration: int) -> ProjectPlan:
 def _fallback_image(path: Path, scene_index: int, instruction: str) -> Path:
     img = Image.new("RGB", (1080, 1920), (232, 224, 210))
     draw = ImageDraw.Draw(img)
-    # Abstract, text-free visual placeholder; replaced by HF when configured.
     draw.ellipse((180, 250, 900, 970), outline=(80, 70, 60), width=10)
     draw.rectangle((250, 1050, 830, 1600), outline=(90, 80, 70), width=10)
     img.save(path, quality=92)
@@ -166,5 +166,7 @@ def run_project(instruction: str, duration: int, status_cb=lambda s: None) -> Pa
     status_cb("Mixing ASMR/SFX and rendering final MP4...")
     out = render(clips, plan, project_dir)
     checkpoint.save("completed", {"output": str(out)})
+    status_cb("Cleaning temporary images, audio and intermediate files...")
+    cleanup_project_artifacts(project_dir, out, OUTPUT)
     status_cb(f"QC PASS — {out}")
     return out
