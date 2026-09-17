@@ -111,7 +111,10 @@ class App(tk.Tk):
             win,
             text="First launch needs one working Gemini, Hugging Face and Tavily key. Settings can add more later.",
         ).pack(pady=6)
-        ttk.Button(win, text="SAVE / CONTINUE", command=lambda: self.close_setup(win, first)).pack(pady=12)
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(pady=12)
+        ttk.Button(btn_frame, text="Channel Intelligence", command=self.channel_setup).pack(side="left", padx=8)
+        ttk.Button(btn_frame, text="SAVE / CONTINUE", command=lambda: self.close_setup(win, first)).pack(side="left", padx=8)
         if first:
             win.protocol("WM_DELETE_WINDOW", lambda: None)
 
@@ -335,7 +338,34 @@ class App(tk.Tk):
 
             threading.Thread(target=work, daemon=True).start()
 
-        ttk.Button(conn_frame, text="CONNECT CHANNEL", command=connect).pack(side="right", padx=5)
+        ttk.Button(conn_frame, text="SAVE / CONNECT HANDLE", command=connect).pack(side="right", padx=5)
+
+        # Automation Toggles Frame
+        toggles_frame = ttk.LabelFrame(win, text="Channel Intelligence Automation Toggles", padding=10)
+        toggles_frame.pack(fill="x", padx=15, pady=8)
+
+        auto_sync_var = tk.BooleanVar(value=bool(active_prof.get("auto_sync_enabled", True)))
+        auto_analyze_var = tk.BooleanVar(value=bool(active_prof.get("auto_analyze_enabled", True)))
+        auto_ref_var = tk.BooleanVar(value=bool(active_prof.get("auto_reference_enabled", True)))
+        prevent_repeats_var = tk.BooleanVar(value=bool(active_prof.get("prevent_recipe_repeats", True)))
+
+        def on_toggle_change():
+            p = db.get_channel_profile()
+            if p:
+                db.update_channel_settings(
+                    p["id"],
+                    auto_sync_enabled=auto_sync_var.get(),
+                    auto_analyze_enabled=auto_analyze_var.get(),
+                    auto_reference_enabled=auto_ref_var.get(),
+                    prevent_recipe_repeats=prevent_repeats_var.get(),
+                )
+
+        t_row1 = ttk.Frame(toggles_frame)
+        t_row1.pack(fill="x", pady=2)
+        ttk.Checkbutton(t_row1, text="Auto Sync", variable=auto_sync_var, command=on_toggle_change).pack(side="left", padx=12)
+        ttk.Checkbutton(t_row1, text="Auto Analyze", variable=auto_analyze_var, command=on_toggle_change).pack(side="left", padx=12)
+        ttk.Checkbutton(t_row1, text="Auto Reference Discovery", variable=auto_ref_var, command=on_toggle_change).pack(side="left", padx=12)
+        ttk.Checkbutton(t_row1, text="Prevent Repeats", variable=prevent_repeats_var, command=on_toggle_change).pack(side="left", padx=12)
 
         # Actions frame
         actions_frame = ttk.LabelFrame(win, text="Intelligence Operations", padding=10)
@@ -377,7 +407,7 @@ class App(tk.Tk):
                     from core.channel.improvement import ImprovementEngine
 
                     extractor = RecipeExtractor(db)
-                    videos = db.get_channel_videos(p["id"])
+                    videos = db.get_unextracted_channel_videos(p["id"])
                     for v in videos:
                         extractor.extract_and_save(p["id"], v)
 
@@ -404,7 +434,7 @@ class App(tk.Tk):
                 return
             recs = db.get_recipes(p["id"])
             if not recs:
-                messagebox.showinfo("Recipe Memory", "No recipes currently extracted. Click 'ANALYZE RECIPES & DNA'.")
+                messagebox.showinfo("Recipe Memory", "No recipes currently extracted. Click 'ANALYZE CHANNEL'.")
                 return
             lines = [f"• {r['recipe_name']} ({r.get('cuisine', '')} - {r.get('primary_ingredient', '')})" for r in recs[:20]]
             messagebox.showinfo("Recipe Memory (Top 20)", "\n".join(lines))
@@ -416,15 +446,15 @@ class App(tk.Tk):
                 return
             signals = db.get_improvement_signals(p["id"])
             if not signals:
-                messagebox.showinfo("Improvement Signals", "No signals recorded yet. Click 'ANALYZE RECIPES & DNA'.")
+                messagebox.showinfo("Improvement Signals", "No signals recorded yet. Click 'ANALYZE CHANNEL'.")
                 return
             lines = [f"[{s['area'].upper()}] {s['recommendation']}" for s in signals[:5]]
             messagebox.showinfo("Improvement Signals", "\n\n".join(lines))
 
         act_btn_row = ttk.Frame(actions_frame)
         act_btn_row.pack(fill="x", pady=4)
-        ttk.Button(act_btn_row, text="SYNC CHANNEL NOW", command=sync_now).pack(side="left", padx=5)
-        ttk.Button(act_btn_row, text="ANALYZE RECIPES & DNA", command=analyze_now).pack(side="left", padx=5)
+        ttk.Button(act_btn_row, text="SYNC NOW", command=sync_now).pack(side="left", padx=5)
+        ttk.Button(act_btn_row, text="ANALYZE CHANNEL", command=analyze_now).pack(side="left", padx=5)
         ttk.Button(act_btn_row, text="VIEW RECIPE MEMORY", command=view_recipes).pack(side="left", padx=5)
         ttk.Button(act_btn_row, text="VIEW IMPROVEMENTS", command=view_signals).pack(side="left", padx=5)
 

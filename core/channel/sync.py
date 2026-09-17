@@ -257,7 +257,8 @@ class ChannelSyncEngine:
         try:
             from core.channel.recipe_extractor import RecipeExtractor
             extractor = RecipeExtractor(self.db)
-            videos = self.db.get_channel_videos(channel_profile_id, only_shorts=False)
+            # Incremental sync: only extract for videos that have not yet been analyzed
+            videos = self.db.get_unextracted_channel_videos(channel_profile_id)
             for v in videos:
                 extractor.extract_and_save(channel_profile_id, v)
         except Exception as e:

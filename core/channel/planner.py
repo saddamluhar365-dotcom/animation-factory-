@@ -109,6 +109,10 @@ class ChannelAwarePlanner:
         if prof_obj and prof_obj.id:
             novelty_verdict = self.novelty_engine.evaluate(prof_obj.id, recipe_concept)
             if not novelty_verdict.is_acceptable:
+                status_cb(
+                    f"Channel Intelligence: Detected duplicate '{chosen_title}' ({novelty_verdict.status.value}) against '{novelty_verdict.matched_recipe}'. "
+                    "Regenerating novel concept from content gaps..."
+                )
                 logger.warning(
                     "Proposed recipe '%s' flagged as %s against channel recipe '%s'. Searching alternative novel concept...",
                     chosen_title,
@@ -119,13 +123,19 @@ class ChannelAwarePlanner:
                 chosen_title = recipe_concept.get("recipe_name", "Original Artisanal Creation")
                 novelty_verdict = self.novelty_engine.evaluate(prof_obj.id, recipe_concept)
 
-        # 4. Reference Discovery (Protected Content Rule compliant)
+        # 4. Improvement Signals & Reference Discovery (Protected Content Rule compliant)
+        improvement_signals = []
+        if prof_obj and prof_obj.id:
+            improvement_signals = self.db.get_improvement_signals(prof_obj.id)
+
         manual_prof_dict = manual_references if isinstance(manual_references, dict) else None
         ref_profile = self.auto_ref_engine.get_reference_profile(
             manual_profile=manual_prof_dict,
             channel_profile_id=prof_obj.id if prof_obj else None,
             topic_hint=chosen_title,
         )
+        if improvement_signals:
+            ref_profile["improvement_signals"] = [s.get("recommendation", "") for s in improvement_signals[:3]]
 
         # 5. Build Scenes with physical continuity & ASMR audio timeline
         plan = self._synthesize_project_plan(

@@ -1,10 +1,13 @@
 from __future__ import annotations
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+
+logger = logging.getLogger(__name__)
 
 from .providers import gemini_text, hf_text_to_image, tavily_search
 from .storage import get_keys, load_config
@@ -270,6 +273,21 @@ def run_project(
             db.remember_project(project_key, instruction, duration, "planned")
             db.remember_checkpoint(project_key, "planned")
             checkpoint.save("planned")
+
+            if active_channel:
+                try:
+                    from core.channel.recipe_extractor import RecipeExtractor
+                    extractor = RecipeExtractor(db)
+                    extractor.extract_and_save(
+                        active_channel["id"],
+                        {
+                            "title": plan.title,
+                            "description": " ".join([s.visual_prompt for s in plan.scenes]),
+                        },
+                    )
+                    db.remember("recipe_registered", {"title": plan.title, "channel_id": active_channel["id"]}, project_key, "latest")
+                except Exception as ex:
+                    logger.warning("Failed to register recipe into channel memory: %s", ex)
 
         expected_images = [project_dir / "images" / f"scene_{s.index:03d}.jpg" for s in plan.scenes]
         if all(p.is_file() and p.stat().st_size > 0 for p in expected_images):

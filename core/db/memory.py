@@ -428,10 +428,17 @@ class MemoryDB:
             return 0
         added = 0
         with self.engine.begin() as conn:
+            existing_rows = conn.execute(
+                text("SELECT youtube_video_id FROM channel_videos WHERE channel_profile_id = :cid"),
+                {"cid": channel_profile_id},
+            ).fetchall()
+            existing_ids = {r[0] for r in existing_rows}
+
             for v in videos:
                 vid = str(v.get("youtube_video_id") or v.get("id") or "").strip()
                 if not vid:
                     continue
+                is_new = vid not in existing_ids
                 title = str(v.get("title") or "")
                 desc = str(v.get("description") or "")
                 published_at = v.get("published_at")
@@ -486,7 +493,9 @@ class MemoryDB:
                         "published_at": published_at, "duration": duration, "is_short": is_short,
                         "video_url": video_url, "thumb": thumbnail_url, "etag": etag, "meta": raw_meta
                     })
-                added += 1
+                if is_new:
+                    added += 1
+                    existing_ids.add(vid)
 
             now_str = datetime.now(timezone.utc).isoformat()
             conn.execute(text("""
@@ -508,6 +517,27 @@ class MemoryDB:
         sql = f"SELECT * FROM channel_videos{where} ORDER BY published_at DESC LIMIT :limit"
         with self.engine.begin() as conn:
             rows = conn.execute(text(sql), params).mappings().all()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["raw_metadata"] = self._decode_json(d.get("raw_metadata"))
+            results.append(d)
+        return results
+
+    def get_unextracted_channel_videos(self, channel_profile_id: int, limit: int = 500) -> list[dict[str, Any]]:
+        """Get channel videos that have not yet had culinary intelligence extracted into recipe_memory."""
+        self.initialize()
+        sql = """
+            SELECT v.* FROM channel_videos v
+            WHERE v.channel_profile_id = :cid
+              AND v.id NOT IN (
+                  SELECT channel_video_id FROM recipe_memory
+                  WHERE channel_profile_id = :cid AND channel_video_id IS NOT NULL
+              )
+            ORDER BY v.published_at DESC LIMIT :limit
+        """
+        with self.engine.begin() as conn:
+            rows = conn.execute(text(sql), {"cid": channel_profile_id, "limit": limit}).mappings().all()
         results = []
         for r in rows:
             d = dict(r)
