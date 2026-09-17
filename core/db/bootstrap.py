@@ -1,13 +1,13 @@
 from __future__ import annotations
-
 import os
 import shutil
 import subprocess
 from pathlib import Path
-from urllib.parse import quote
+from sqlalchemy.engine import URL
 
 DEFAULT_DB = "ai_shorts_factory"
 DEFAULT_USER = "ai_shorts_factory"
+DEFAULT_PORT = 5432
 
 
 def find_psql() -> str | None:
@@ -29,12 +29,24 @@ def installation_message() -> str:
 
 
 def database_url() -> str:
+    url_env = os.getenv("YT_AUTO_DB_URL")
+    if url_env:
+        return url_env
     host = os.getenv("YT_AUTO_DB_HOST", "127.0.0.1")
-    port = os.getenv("YT_AUTO_DB_PORT", "5432")
+    port_str = os.getenv("YT_AUTO_DB_PORT", str(DEFAULT_PORT))
+    try:
+        port = int(port_str) if port_str else DEFAULT_PORT
+    except ValueError:
+        port = DEFAULT_PORT
     db = os.getenv("YT_AUTO_DB_NAME", DEFAULT_DB)
     user = os.getenv("YT_AUTO_DB_USER", DEFAULT_USER)
     password = os.getenv("YT_AUTO_DB_PASSWORD", "")
-    encoded_user = quote(user, safe="")
-    encoded_password = quote(password, safe="")
-    encoded_db = quote(db, safe="")
-    return f"postgresql+psycopg://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_db}"
+    url = URL.create(
+        drivername="postgresql+psycopg",
+        username=user or None,
+        password=password if password != "" else None,
+        host=host,
+        port=port,
+        database=db or None,
+    )
+    return url.render_as_string(hide_password=False)

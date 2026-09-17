@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from core.db.bootstrap import database_url
 
@@ -15,6 +18,7 @@ class MemoryDB:
     """Durable database for engine state, knowledge, decisions, artifacts and learning."""
 
     def __init__(self, url: str | None = None, engine: Engine | None = None):
+        self._custom_engine = engine is not None
         self.engine = engine or create_engine(url or database_url(), pool_pre_ping=True, future=True)
         self._initialized = False
 
@@ -22,9 +26,7 @@ class MemoryDB:
     def dialect(self) -> str:
         return self.engine.dialect.name
 
-    def initialize(self) -> None:
-        if self._initialized:
-            return
+    def _create_schema(self) -> None:
         if self.dialect == "sqlite":
             statements = [
                 "CREATE TABLE IF NOT EXISTS reference_profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, source_url TEXT, source_hash TEXT NOT NULL, profile TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
@@ -32,7 +34,7 @@ class MemoryDB:
                 "CREATE TABLE IF NOT EXISTS research_items (id INTEGER PRIMARY KEY AUTOINCREMENT, source_url TEXT, title TEXT, topic TEXT, summary TEXT, evidence TEXT, retrieved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, project_key TEXT UNIQUE NOT NULL, instruction TEXT NOT NULL, duration INTEGER NOT NULL, state TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE, stage TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
-                "CREATE TABLE IF NOT EXISTS engine_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, project_key TEXT, memory_type TEXT NOT NULL, memory_key TEXT, content TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_key, memory_type, memory_key))",
+                "CREATE TABLE IF NOT EXISTS engine_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, project_key TEXT NOT NULL DEFAULT '__global__', memory_type TEXT NOT NULL, memory_key TEXT NOT NULL, content TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_key, memory_type, memory_key))",
             ]
         else:
             statements = [
@@ -41,7 +43,7 @@ class MemoryDB:
                 "CREATE TABLE IF NOT EXISTS research_items (id BIGSERIAL PRIMARY KEY, source_url TEXT, title TEXT, topic TEXT, summary TEXT, evidence JSONB, retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now())",
                 "CREATE TABLE IF NOT EXISTS projects (id BIGSERIAL PRIMARY KEY, project_key TEXT UNIQUE NOT NULL, instruction TEXT NOT NULL, duration INTEGER NOT NULL, state JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())",
                 "CREATE TABLE IF NOT EXISTS checkpoints (id BIGSERIAL PRIMARY KEY, project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE, stage TEXT NOT NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
-                "CREATE TABLE IF NOT EXISTS engine_memory (id BIGSERIAL PRIMARY KEY, project_key TEXT, memory_type TEXT NOT NULL, memory_key TEXT, content JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(project_key, memory_type, memory_key))",
+                "CREATE TABLE IF NOT EXISTS engine_memory (id BIGSERIAL PRIMARY KEY, project_key TEXT NOT NULL DEFAULT '__global__', memory_type TEXT NOT NULL, memory_key TEXT NOT NULL, content JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(project_key, memory_type, memory_key))",
             ]
         with self.engine.begin() as conn:
             for statement in statements:
@@ -49,7 +51,23 @@ class MemoryDB:
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_engine_memory_project ON engine_memory(project_key)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_engine_memory_type ON engine_memory(memory_type)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_engine_memory_created ON engine_memory(created_at DESC)"))
-        self._initialized = True
+
+    def initialize(self) -> None:
+        if self._initialized:
+            return
+        try:
+            self._create_schema()
+            self._initialized = True
+        except OperationalError:
+            # Fall back to durable local SQLite if PostgreSQL is offline/unreachable and not forced
+            if not self._custom_engine and self.dialect != "sqlite" and not os.getenv("CI") and os.getenv("YT_AUTO_DB_SQLITE_FALLBACK", "1") == "1":
+                sqlite_path = Path(__file__).resolve().parent.parent.parent / "data" / "memory.db"
+                sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+                self.engine = create_engine(f"sqlite:///{sqlite_path.as_posix()}", future=True)
+                self._create_schema()
+                self._initialized = True
+            else:
+                raise
 
     def _json(self, value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, default=str)
@@ -126,8 +144,10 @@ class MemoryDB:
         data = self._json(payload or {})
         with self.engine.begin() as conn:
             if self.dialect == "sqlite":
+                conn.execute(text("INSERT OR IGNORE INTO projects(project_key, instruction, duration, state) VALUES (:key, 'auto-initialized', 0, '{}')"), {"key": project_key})
                 conn.execute(text("INSERT INTO checkpoints(project_id,stage,payload) SELECT id,:stage,:payload FROM projects WHERE project_key=:key"), {"key": project_key, "stage": stage, "payload": data})
             else:
+                conn.execute(text("INSERT INTO projects(project_key, instruction, duration, state) VALUES (:key, 'auto-initialized', 0, '{}'::jsonb) ON CONFLICT(project_key) DO NOTHING"), {"key": project_key})
                 conn.execute(text("INSERT INTO checkpoints(project_id,stage,payload) SELECT id,:stage,CAST(:payload AS jsonb) FROM projects WHERE project_key=:key"), {"key": project_key, "stage": stage, "payload": data})
         self.remember("checkpoint", {"stage": stage, "payload": payload or {}}, project_key, f"{stage}:{datetime.now(timezone.utc).isoformat()}")
 
