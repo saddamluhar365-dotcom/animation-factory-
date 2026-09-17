@@ -162,27 +162,27 @@ def test_gemini(key: str) -> tuple[bool, str]:
 
 
 def test_hf(key: str) -> tuple[bool, str]:
+    from core.image.router import HuggingFaceImageRouter
     url = "https://huggingface.co/api/whoami-v2"
     try:
         r = requests.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=TIMEOUT)
-        if r.ok:
-            try:
-                name = r.json().get("name") or "user"
-                return True, f"Hugging Face token verified for @{name}"
-            except Exception:
-                return True, "Hugging Face token verified successfully"
-        return False, _format_http_error(r)
-    except requests.RequestException as exc:
-        return False, f"Network error: {exc}"
+        if not r.ok:
+            if r.status_code in (401, 403):
+                return False, f"Hugging Face — INVALID_TOKEN: {r.text[:120].strip()}"
+            return False, f"Hugging Face — {_format_http_error(r)}"
 
+        try:
+            name = r.json().get("name") or "user"
+        except Exception:
+            name = "user"
 
-def test_tavily(key: str) -> tuple[bool, str]:
-    url = "https://api.tavily.com/search"
-    try:
-        r = requests.post(url, json={"api_key": key, "query": "test", "max_results": 1}, timeout=TIMEOUT)
-        if r.ok:
-            return True, "Tavily search API verified successfully"
-        return False, _format_http_error(r)
+        router = HuggingFaceImageRouter(api_keys=[key])
+        routes = router.candidate_routes()
+        if not routes:
+            return False, "Hugging Face — MODEL_UNAVAILABLE: no active text-to-image routes available"
+
+        primary_model, primary_provider = routes[0]
+        return True, f"Hugging Face — Image Generation: LIVE (@{name}, model={primary_model}, provider={primary_provider})"
     except requests.RequestException as exc:
         return False, f"Network error: {exc}"
 
@@ -236,21 +236,28 @@ def gemini_image_analysis(image_bytes: bytes, prompt: str) -> str:
     raise RuntimeError(f"Gemini image analysis failed: {last}")
 
 
-def hf_text_to_image(prompt: str, model: str = "black-forest-labs/FLUX.1-schnell") -> bytes:
+def hf_text_to_image(prompt: str, model: str | None = None) -> bytes:
+    from pathlib import Path
+    import tempfile
+    from core.image.router import HuggingFaceImageRouter
+
     keys = get_keys("huggingface")
-    last = "No Hugging Face token configured"
-    for key in keys:
-        try:
-            url = f"https://router.huggingface.co/hf-inference/models/{model}"
-            r = requests.post(url, headers={"Authorization": f"Bearer {key}"}, json={"inputs": prompt}, timeout=180)
-            if r.ok and r.headers.get("content-type", "").startswith("image/"):
-                return r.content
-            last = _format_http_error(r)
-        except requests.RequestException as exc:
-            last = f"Network error: {exc}"
-        except Exception as exc:
-            last = str(exc)
-    raise RuntimeError(f"Hugging Face image generation failed: {last}")
+    if not keys:
+        raise RuntimeError("Hugging Face image generation failed: No Hugging Face token configured")
+
+    preferred = [model] if model else None
+    router = HuggingFaceImageRouter(api_keys=keys, preferred_models=preferred)
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        router.generate(prompt=prompt, output_path=tmp_path)
+        return tmp_path.read_bytes()
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def tavily_search(query: str) -> list[dict]:

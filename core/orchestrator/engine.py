@@ -21,6 +21,7 @@ class ShortsEngine:
         duration: int,
         status_cb: Callable[[str], None] | None = None,
         project_dir: Path | None = None,
+        allow_placeholders: bool = False,
     ) -> Path:
         if not instruction or not instruction.strip():
             raise ValueError("instruction is required")
@@ -30,4 +31,5 @@ class ShortsEngine:
             duration,
             status_cb or (lambda _status: None),
             project_dir=project_dir,
+            allow_placeholders=allow_placeholders,
         )

@@ -42,6 +42,10 @@ class ProjectPlan:
     style: dict = field(default_factory=dict)
     character: dict = field(default_factory=dict)
 
+    @property
+    def reference_profile(self) -> dict:
+        return self.style
+
     def to_dict(self) -> dict:
         return asdict(self)
 

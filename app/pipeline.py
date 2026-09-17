@@ -7,13 +7,15 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from .providers import gemini_text, hf_text_to_image, tavily_search
-from .storage import load_config
+from .storage import get_keys, load_config
 from core.audio.timeline import AudioEvent, AudioTimeline
 from core.cleanup import cleanup_project_artifacts
 from core.continuity.validator import validate_plan_continuity
 from core.contracts import ProjectPlan, SceneBeat, ScenePlan
 from core.db.memory import MemoryDB
 from core.duration import distribute_duration, scene_count, validate_duration
+from core.image.router import HuggingFaceImageRouter
+from core.image.validator import validate_image_file
 from core.qc.engine import validate_output
 from core.recovery.checkpoints import Checkpoints
 from core.render.ffmpeg import animate_image, concat, mux_video_audio, synthesize_audio
@@ -86,31 +88,69 @@ def make_plan(instruction: str, duration: int, research: list[dict] | None = Non
     return _fallback_plan(instruction, duration)
 
 
-def _fallback_image(path: Path, scene_index: int, instruction: str) -> Path:
-    img = Image.new("RGB", (1080, 1920), (232, 224, 210))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse((180, 250, 900, 970), outline=(80, 70, 60), width=10)
-    draw.rectangle((250, 1050, 830, 1600), outline=(90, 80, 70), width=10)
-    img.save(path, quality=92)
-    return path
+def _format_scene_prompt(scene: ScenePlan, plan: ProjectPlan) -> str:
+    parts = [scene.visual_prompt]
+
+    # Incorporate Reference Style DNA if present
+    profile = plan.reference_profile or {}
+    visual_style = profile.get("visual_style") or profile.get("style") or profile.get("dna", {})
+    if isinstance(visual_style, dict):
+        desc = visual_style.get("description") or visual_style.get("name")
+        palette = visual_style.get("color_palette") or visual_style.get("palette")
+        lighting = visual_style.get("lighting")
+        camera = visual_style.get("camera_language") or visual_style.get("camera")
+        if desc:
+            parts.append(f"Visual style: {desc}")
+        if palette:
+            parts.append(f"Color palette: {palette}")
+        if lighting:
+            parts.append(f"Lighting: {lighting}")
+        if camera:
+            parts.append(f"Camera: {camera}")
+    elif isinstance(visual_style, str) and visual_style.strip():
+        parts.append(f"Style DNA: {visual_style.strip()}")
+
+    parts.append("vertical 9:16, cinematic, high detail, coherent lighting, no text, no subtitles, no watermark")
+    return ", ".join(parts)
 
 
-def generate_images(plan: ProjectPlan, project_dir: Path, status_cb=lambda s: None) -> list[Path]:
+def generate_images(
+    plan: ProjectPlan,
+    project_dir: Path,
+    status_cb=lambda s: None,
+    allow_placeholders: bool = False,
+    router: HuggingFaceImageRouter | None = None,
+) -> list[Path]:
     image_dir = project_dir / "images"
     image_dir.mkdir(exist_ok=True)
     result = []
+
+    if router is None:
+        keys = get_keys("huggingface")
+        router = HuggingFaceImageRouter(api_keys=keys)
+
     for scene in plan.scenes:
-        prompt = scene.visual_prompt + ", vertical 9:16, cinematic, high detail, coherent lighting, no text, no watermark"
         path = image_dir / f"scene_{scene.index:03d}.jpg"
+        prompt = _format_scene_prompt(scene, plan)
+        status_cb(f"Scene {scene.index}: generating image...")
         try:
-            data = hf_text_to_image(prompt)
-            if not data.startswith(b"\xff\xd8") and not data.startswith(b"\x89PNG"):
-                raise RuntimeError("image provider returned non-image data")
-            path.write_bytes(data)
+            image_res = router.generate(
+                prompt=prompt,
+                output_path=path,
+                width=1080,
+                height=1920,
+                project_context=plan.title,
+                allow_placeholders=allow_placeholders,
+            )
+            validate_image_file(path)
+            status_cb(f"Scene {scene.index}: image generated via {image_res.route_used}")
+            result.append(path)
         except Exception as exc:
-            status_cb(f"Scene {scene.index}: image API failed, using local placeholder ({exc})")
-            _fallback_image(path, scene.index, plan.title)
-        result.append(path)
+            status_cb(f"Scene {scene.index}: image generation failed ({exc})")
+            raise RuntimeError(
+                f"Scene {scene.index} image generation failed: {exc}. "
+                f"Job state preserved for resumption in {project_dir}."
+            ) from exc
     return result
 
 
@@ -152,7 +192,13 @@ def render(clips: list[Path], plan: ProjectPlan, project_dir: Path) -> tuple[Pat
     return out, timeline, errors
 
 
-def run_project(instruction: str, duration: int, status_cb=lambda s: None, project_dir: Path | None = None) -> Path:
+def run_project(
+    instruction: str,
+    duration: int,
+    status_cb=lambda s: None,
+    project_dir: Path | None = None,
+    allow_placeholders: bool = False,
+) -> Path:
     duration = validate_duration(duration)
     if project_dir is None:
         project_dir = PROJECTS / ("short_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f"))
@@ -204,7 +250,7 @@ def run_project(instruction: str, duration: int, status_cb=lambda s: None, proje
             images = expected_images
         else:
             status_cb("Generating consistent scene images...")
-            images = generate_images(plan, project_dir, status_cb)
+            images = generate_images(plan, project_dir, status_cb, allow_placeholders=allow_placeholders)
             db.remember("image_generation", {"count": len(images), "scenes": [str(p) for p in images]}, project_key, "latest")
             for image in images:
                 db.remember_artifact(project_key, "image", str(image), {"temporary": True})
