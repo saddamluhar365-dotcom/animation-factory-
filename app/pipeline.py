@@ -96,7 +96,8 @@ def _format_scene_prompt(scene: ScenePlan, plan: ProjectPlan) -> str:
 
     # Incorporate Reference Style DNA if present
     profile = plan.reference_profile or {}
-    visual_style = profile.get("visual_style") or profile.get("style") or profile.get("dna", {})
+    dna = profile.get("style_dna") or profile.get("dna") or profile
+    visual_style = dna.get("visual_style") if isinstance(dna, dict) else (profile.get("visual_style") or profile.get("style"))
     if isinstance(visual_style, dict):
         desc = visual_style.get("description") or visual_style.get("name")
         palette = visual_style.get("color_palette") or visual_style.get("palette")
@@ -112,6 +113,11 @@ def _format_scene_prompt(scene: ScenePlan, plan: ProjectPlan) -> str:
             parts.append(f"Camera: {camera}")
     elif isinstance(visual_style, str) and visual_style.strip():
         parts.append(f"Style DNA: {visual_style.strip()}")
+
+    # Inject visual consistency anchors for character & environment stability
+    anchors = dna.get("consistency_anchors") if isinstance(dna, dict) else None
+    if anchors and isinstance(anchors, list):
+        parts.append("Visual consistency: " + "; ".join(str(a) for a in anchors[:3]))
 
     parts.append("vertical 9:16, cinematic, high detail, coherent lighting, no text, no subtitles, no watermark")
     return ", ".join(parts)
@@ -174,8 +180,22 @@ def build_audio_timeline(plan: ProjectPlan) -> AudioTimeline:
         timeline.add(AudioEvent(scene.start, min(scene.end, scene.start + min(0.8, scene.end-scene.start)), "ambience", "environment", 0.25))
         for beat in scene.beats:
             lower = beat.action.lower()
-            if any(word in lower for word in ("cut", "place", "pour", "tap", "step", "knock", "mix", "open", "close")):
-                timeline.add(AudioEvent(beat.start, min(beat.end, beat.start + 0.35), "sfx", "tap", 0.18, True))
+            evt_name = "tap"
+            if any(w in lower for w in ("chop", "cut", "slice", "dice", "knife")):
+                evt_name = "chop"
+            elif any(w in lower for w in ("pour", "liquid", "drizzle", "oil", "water", "sauce")):
+                evt_name = "pour"
+            elif any(w in lower for w in ("sizzle", "sear", "fry", "bubble", "flame", "pan")):
+                evt_name = "sizzle"
+            elif any(w in lower for w in ("clink", "plate", "bowl", "metal", "tap", "knock")):
+                evt_name = "clink"
+            elif any(w in lower for w in ("mix", "stir", "scrape", "swoosh", "spread")):
+                evt_name = "scrape"
+            elif any(w in lower for w in ("place", "open", "close", "step")):
+                evt_name = "tap"
+            else:
+                continue
+            timeline.add(AudioEvent(beat.start, min(beat.end, beat.start + 0.35), "sfx", evt_name, 0.22, True))
     return timeline
 
 
@@ -183,8 +203,25 @@ def animate_images(images: list[Path], plan: ProjectPlan, project_dir: Path) -> 
     clips = project_dir / "clips"
     clips.mkdir(exist_ok=True)
     result = []
+
+    profile = plan.reference_profile or {}
+    style_dna = profile.get("style_dna") or profile.get("dna") or {}
+    fps = int(style_dna.get("fps") or profile.get("characteristics", {}).get("fps_target") or 60)
+
+    from core.render.animation import select_motion_profile
+
     for image, scene in zip(images, plan.scenes):
-        result.append(animate_image(image, clips / f"scene_{scene.index:03d}.mp4", scene.end - scene.start))
+        first_action = scene.beats[0].action if scene.beats else ""
+        motion = select_motion_profile(scene.index, len(plan.scenes), first_action)
+        result.append(
+            animate_image(
+                image,
+                clips / f"scene_{scene.index:03d}.mp4",
+                scene.end - scene.start,
+                fps=fps,
+                motion_type=motion,
+            )
+        )
     return result
 
 
@@ -203,6 +240,24 @@ def render(clips: list[Path], plan: ProjectPlan, project_dir: Path) -> tuple[Pat
     if errors:
         raise RuntimeError("Output QC failed: " + "; ".join(errors))
     (project_dir / "audio_timeline.json").write_text(json.dumps(timeline.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Automated Reference vs Output QC Comparison
+    ref_file = ROOT / "assets" / "references" / "videoplayback.mp4"
+    if not ref_file.exists():
+        refs = list((ROOT / "assets" / "references").glob("*.mp4"))
+        ref_file = refs[0] if refs else None
+
+    if ref_file and ref_file.exists():
+        try:
+            from core.qc.comparator import compare_reference_to_output
+            qc_report = compare_reference_to_output(ref_file, out, plan=plan)
+            (project_dir / "reference_qc_report.json").write_text(
+                json.dumps(qc_report.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as qc_err:
+            logger.warning("Reference QC comparison non-fatal error: %s", qc_err)
+
     return out, timeline, errors
 
 

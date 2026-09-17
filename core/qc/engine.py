@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from core.qc.rules import validate_metadata
+from core.qc.comparator import ReferenceQCComparator, QCComparisonReport, compare_reference_to_output
 
 
 def ffprobe_json(path: Path) -> dict:
