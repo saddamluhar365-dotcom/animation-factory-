@@ -12,6 +12,7 @@ from core.audio.timeline import AudioEvent, AudioTimeline
 from core.cleanup import cleanup_project_artifacts
 from core.continuity.validator import validate_plan_continuity
 from core.contracts import ProjectPlan, SceneBeat, ScenePlan
+from core.db.memory import MemoryDB
 from core.duration import distribute_duration, scene_count, validate_duration
 from core.qc.engine import validate_output
 from core.recovery.checkpoints import Checkpoints
@@ -22,6 +23,12 @@ PROJECTS = ROOT / "projects"
 OUTPUT = ROOT / "output"
 PROJECTS.mkdir(exist_ok=True)
 OUTPUT.mkdir(exist_ok=True)
+
+
+def _memory(project_key: str) -> MemoryDB:
+    db = MemoryDB()
+    db.remember("engine_event", {"event": "pipeline_access", "timestamp": datetime.utcnow().isoformat()}, project_key)
+    return db
 
 
 def _fallback_plan(instruction: str, duration: int) -> ProjectPlan:
@@ -68,7 +75,7 @@ def _normalize_gemini_plan(raw: list[dict], instruction: str, duration: int) -> 
     return ProjectPlan(duration, str(raw[0].get("title", instruction[:80])), scenes, load_config().get("reference_profile", {}), {})
 
 
-def make_plan(instruction: str, duration: int) -> ProjectPlan:
+def make_plan(instruction: str, duration: int, project_key: str | None = None) -> ProjectPlan:
     duration = validate_duration(duration)
     cfg = load_config()
     profile = json.dumps(cfg.get("reference_profile", {}), ensure_ascii=False)[:16000]
@@ -151,22 +158,44 @@ def run_project(instruction: str, duration: int, status_cb=lambda s: None) -> Pa
     duration = validate_duration(duration)
     project_dir = PROJECTS / ("short_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     project_dir.mkdir(parents=True)
+    db = MemoryDB()
+    project_key = project_dir.name
+    db.remember_project(project_key, instruction, duration, "created")
+    db.remember("instruction", {"instruction": instruction, "duration": duration}, project_key, "latest")
     checkpoint = Checkpoints(project_dir / "checkpoint.json")
     checkpoint.save("created", {"duration": duration, "instruction": instruction})
+    db.remember_checkpoint(project_key, "created", {"duration": duration, "instruction": instruction})
     status_cb("Planning story, scenes and synchronized audio...")
-    plan = make_plan(instruction, duration)
-    (project_dir / "plan.json").write_text(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    checkpoint.save("planned")
+    plan = make_plan(instruction, duration, project_key)
+    plan_data = plan.to_dict()
+    (project_dir / "plan.json").write_text(json.dumps(plan_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    db.remember_plan(project_key, plan_data)
+    db.remember_project(project_key, instruction, duration, "planned")
+    db.remember_checkpoint(project_key, "planned")
     status_cb("Generating consistent scene images...")
     images = generate_images(plan, project_dir, status_cb)
+    db.remember("image_generation", {"count": len(images), "scenes": [str(p) for p in images]}, project_key, "latest")
+    for image in images:
+        db.remember_artifact(project_key, "image", str(image), {"temporary": True})
     checkpoint.save("images", {"count": len(images)})
+    db.remember_checkpoint(project_key, "images", {"count": len(images)})
     status_cb("Animating scenes locally with FFmpeg...")
     clips = animate_images(images, plan, project_dir)
+    db.remember("animation", {"count": len(clips), "clips": [str(p) for p in clips]}, project_key, "latest")
+    for clip in clips:
+        db.remember_artifact(project_key, "clip", str(clip), {"temporary": True})
     checkpoint.save("animated", {"count": len(clips)})
+    db.remember_checkpoint(project_key, "animated", {"count": len(clips)})
     status_cb("Mixing ASMR/SFX and rendering final MP4...")
     out = render(clips, plan, project_dir)
+    db.remember_artifact(project_key, "final_video", str(out), {"temporary": False})
+    db.remember("audio_timeline", build_audio_timeline(plan).to_dict(), project_key, "latest")
+    db.remember_qc(project_key, [], str(out))
+    db.remember_project(project_key, instruction, duration, "completed")
     checkpoint.save("completed", {"output": str(out)})
+    db.remember_checkpoint(project_key, "completed", {"output": str(out)})
     status_cb("Cleaning temporary images, audio and intermediate files...")
     cleanup_project_artifacts(project_dir, out, OUTPUT)
+    db.remember("cleanup", {"project_dir": str(project_dir), "final_output": str(out), "temporary_artifacts_deleted": True}, project_key, "completed")
     status_cb(f"QC PASS — {out}")
     return out
