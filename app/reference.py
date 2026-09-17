@@ -11,6 +11,17 @@ REF_DIR = ROOT / "assets" / "references"
 REF_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def download_reference_url(url: str) -> Path:
+    try:
+        import yt_dlp
+    except ImportError as exc:
+        raise RuntimeError("yt-dlp is required for Shorts URL download") from exc
+    opts = {"outtmpl": str(REF_DIR / "%(id)s.%(ext)s"), "format": "mp4/best", "noplaylist": True, "quiet": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        return Path(ydl.prepare_filename(info))
+
+
 def probe_video(path: Path) -> dict:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
@@ -33,10 +44,9 @@ def extract_frame(path: Path, output: Path, second: float = 1.0) -> Path:
 def analyze_reference(path: Path) -> dict:
     metadata = probe_video(path)
     frame = REF_DIR / f"{path.stem}_sample.jpg"
-    visual = ""
     try:
         extract_frame(path, frame)
-        visual = gemini_image_analysis(frame.read_bytes(), "Analyze this reference short frame for visual production style. Return concise observations for art style, character design, environment, camera, lighting, color, composition, animation feel, and mood. Do not identify or reproduce the creator.")
+        visual = gemini_image_analysis(frame.read_bytes(), "Analyze this reference short frame for high-level production style: art style, character design, environment, camera, lighting, color, composition, animation feel and mood. Do not identify or reproduce the creator.")
     except Exception as exc:
         visual = f"Visual AI analysis unavailable: {exc}"
     return {"file": path.name, "metadata": metadata, "visual_analysis": visual}
@@ -44,10 +54,6 @@ def analyze_reference(path: Path) -> dict:
 
 def save_reference_profile(results: list[dict]) -> None:
     config = load_config()
-    profile = {
-        "references": results,
-        "instruction": "Use references only as high-level production guidance. Generate original stories and assets; do not copy protected characters, scenes, dialogue, or shot-for-shot sequences."
-    }
-    config["reference_profile"] = profile
+    config["reference_profile"] = {"references": results, "instruction": "Use references only as high-level production guidance. Generate original stories and assets; do not copy protected characters, scenes, dialogue, or shot-for-shot sequences."}
     config["initialized"] = True
     save_config(config)
