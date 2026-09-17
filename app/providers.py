@@ -187,8 +187,18 @@ def test_hf(key: str) -> tuple[bool, str]:
         return False, f"Network error: {exc}"
 
 
+def test_fal(key: str) -> tuple[bool, str]:
+    from core.video.client import test_fal_key
+    return test_fal_key(key)
+
+
 def register(provider: str, key: str) -> tuple[bool, str]:
-    tests = {"gemini": test_gemini, "huggingface": test_hf, "tavily": test_tavily}
+    tests = {
+        "gemini": test_gemini,
+        "huggingface": test_hf,
+        "tavily": test_tavily,
+        "fal": test_fal,
+    }
     fn = tests.get(provider)
     if not fn:
         return False, "Unknown provider"
@@ -196,6 +206,7 @@ def register(provider: str, key: str) -> tuple[bool, str]:
     if ok:
         set_api(provider, key)
     return ok, msg
+
 
 
 def gemini_text(prompt: str) -> str:

@@ -267,6 +267,7 @@ def run_project(
     status_cb=lambda s: None,
     project_dir: Path | None = None,
     allow_placeholders: bool = False,
+    video_provider: str = "image_animation",
 ) -> Path:
     duration = validate_duration(duration)
     if project_dir is None:
@@ -344,30 +345,23 @@ def run_project(
                 except Exception as ex:
                     logger.warning("Failed to register recipe into channel memory: %s", ex)
 
-        expected_images = [project_dir / "images" / f"scene_{s.index:03d}.jpg" for s in plan.scenes]
-        if all(p.is_file() and p.stat().st_size > 0 for p in expected_images):
-            status_cb("Resuming with existing scene images...")
-            images = expected_images
-        else:
-            status_cb("Generating consistent scene images...")
-            images = generate_images(plan, project_dir, status_cb, allow_placeholders=allow_placeholders)
-            db.remember("image_generation", {"count": len(images), "scenes": [str(p) for p in images]}, project_key, "latest")
-            for image in images:
-                db.remember_artifact(project_key, "image", str(image), {"temporary": True})
-            checkpoint.save("images", {"count": len(images)})
-            db.remember_checkpoint(project_key, "images", {"count": len(images)})
-
         expected_clips = [project_dir / "clips" / f"scene_{s.index:03d}.mp4" for s in plan.scenes]
         if all(c.is_file() and c.stat().st_size > 0 for c in expected_clips):
             status_cb("Resuming with existing scene clips...")
             clips = expected_clips
         else:
-            status_cb("Animating scenes locally with FFmpeg...")
-            clips = animate_images(images, plan, project_dir)
-            db.remember("animation", {"count": len(clips), "clips": [str(p) for p in clips]}, project_key, "latest")
+            from core.video.providers import resolve_video_provider
+            provider_inst = resolve_video_provider(video_provider)
+            clips = provider_inst.generate_scene_clips(
+                plan=plan,
+                project_dir=project_dir,
+                status_cb=status_cb,
+                allow_placeholders=allow_placeholders,
+            )
+            db.remember("video_generation", {"provider": video_provider, "count": len(clips), "clips": [str(p) for p in clips]}, project_key, "latest")
             for clip in clips:
                 db.remember_artifact(project_key, "clip", str(clip), {"temporary": True})
-            checkpoint.save("animated", {"count": len(clips)})
+            checkpoint.save("animated", {"count": len(clips), "provider": video_provider})
             db.remember_checkpoint(project_key, "animated", {"count": len(clips)})
 
         status_cb("Mixing ASMR/SFX and rendering final MP4...")
