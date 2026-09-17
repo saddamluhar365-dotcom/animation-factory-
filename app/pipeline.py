@@ -152,52 +152,77 @@ def render(clips: list[Path], plan: ProjectPlan, project_dir: Path) -> tuple[Pat
     return out, timeline, errors
 
 
-def run_project(instruction: str, duration: int, status_cb=lambda s: None) -> Path:
+def run_project(instruction: str, duration: int, status_cb=lambda s: None, project_dir: Path | None = None) -> Path:
     duration = validate_duration(duration)
-    project_dir = PROJECTS / ("short_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f"))
-    project_dir.mkdir(parents=True)
+    if project_dir is None:
+        project_dir = PROJECTS / ("short_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f"))
+    project_dir.mkdir(parents=True, exist_ok=True)
     project_key = project_dir.name
     db = MemoryDB()
     db.remember_project(project_key, instruction, duration, "created")
     db.remember("instruction", {"instruction": instruction, "duration": duration}, project_key, "latest")
     checkpoint = Checkpoints(project_dir / "checkpoint.json")
-    checkpoint.save("created", {"duration": duration, "instruction": instruction})
-    db.remember_checkpoint(project_key, "created", {"duration": duration, "instruction": instruction})
+    if not (project_dir / "checkpoint.json").exists():
+        checkpoint.save("created", {"duration": duration, "instruction": instruction})
+        db.remember_checkpoint(project_key, "created", {"duration": duration, "instruction": instruction})
     try:
-        status_cb("Researching the requested topic...")
-        research = tavily_search(instruction)
-        for item in research:
-            db.remember_research({"url": item.get("url"), "title": item.get("title"), "topic": instruction, "summary": item.get("content") or item.get("snippet"), "evidence": item})
-        db.remember("research_batch", {"query": instruction, "count": len(research), "retrieved_at": datetime.now(timezone.utc).isoformat()}, project_key, "latest")
-        db.remember_decision(project_key, {"key": "research", "provider": "tavily", "result_count": len(research), "fallback": not bool(research)})
+        plan: ProjectPlan | None = None
+        plan_file = project_dir / "plan.json"
+        if plan_file.is_file():
+            try:
+                saved_plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                candidate = ProjectPlan.from_dict(saved_plan_data)
+                if not validate_plan_continuity(candidate):
+                    plan = candidate
+                    status_cb("Resuming with saved plan...")
+            except Exception:
+                plan = None
 
-        status_cb("Planning story, scenes and synchronized audio...")
-        plan = make_plan(instruction, duration, research)
-        plan_data = plan.to_dict()
-        continuity_errors = validate_plan_continuity(plan)
-        if continuity_errors:
-            raise RuntimeError("Plan continuity failed: " + "; ".join(continuity_errors))
-        (project_dir / "plan.json").write_text(json.dumps(plan_data, ensure_ascii=False, indent=2), encoding="utf-8")
-        db.remember_plan(project_key, plan_data)
-        db.remember_project(project_key, instruction, duration, "planned")
-        db.remember_checkpoint(project_key, "planned")
-        checkpoint.save("planned")
+        if plan is None:
+            status_cb("Researching the requested topic...")
+            research = tavily_search(instruction)
+            for item in research:
+                db.remember_research({"url": item.get("url"), "title": item.get("title"), "topic": instruction, "summary": item.get("content") or item.get("snippet"), "evidence": item})
+            db.remember("research_batch", {"query": instruction, "count": len(research), "retrieved_at": datetime.now(timezone.utc).isoformat()}, project_key, "latest")
+            db.remember_decision(project_key, {"key": "research", "provider": "tavily", "result_count": len(research), "fallback": not bool(research)})
 
-        status_cb("Generating consistent scene images...")
-        images = generate_images(plan, project_dir, status_cb)
-        db.remember("image_generation", {"count": len(images), "scenes": [str(p) for p in images]}, project_key, "latest")
-        for image in images:
-            db.remember_artifact(project_key, "image", str(image), {"temporary": True})
-        checkpoint.save("images", {"count": len(images)})
-        db.remember_checkpoint(project_key, "images", {"count": len(images)})
+            status_cb("Planning story, scenes and synchronized audio...")
+            plan = make_plan(instruction, duration, research)
+            plan_data = plan.to_dict()
+            continuity_errors = validate_plan_continuity(plan)
+            if continuity_errors:
+                raise RuntimeError("Plan continuity failed: " + "; ".join(continuity_errors))
+            plan_file.write_text(json.dumps(plan_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            db.remember_plan(project_key, plan_data)
+            db.remember_project(project_key, instruction, duration, "planned")
+            db.remember_checkpoint(project_key, "planned")
+            checkpoint.save("planned")
 
-        status_cb("Animating scenes locally with FFmpeg...")
-        clips = animate_images(images, plan, project_dir)
-        db.remember("animation", {"count": len(clips), "clips": [str(p) for p in clips]}, project_key, "latest")
-        for clip in clips:
-            db.remember_artifact(project_key, "clip", str(clip), {"temporary": True})
-        checkpoint.save("animated", {"count": len(clips)})
-        db.remember_checkpoint(project_key, "animated", {"count": len(clips)})
+        expected_images = [project_dir / "images" / f"scene_{s.index:03d}.jpg" for s in plan.scenes]
+        if all(p.is_file() and p.stat().st_size > 0 for p in expected_images):
+            status_cb("Resuming with existing scene images...")
+            images = expected_images
+        else:
+            status_cb("Generating consistent scene images...")
+            images = generate_images(plan, project_dir, status_cb)
+            db.remember("image_generation", {"count": len(images), "scenes": [str(p) for p in images]}, project_key, "latest")
+            for image in images:
+                db.remember_artifact(project_key, "image", str(image), {"temporary": True})
+            checkpoint.save("images", {"count": len(images)})
+            db.remember_checkpoint(project_key, "images", {"count": len(images)})
+
+        expected_clips = [project_dir / "clips" / f"scene_{s.index:03d}.mp4" for s in plan.scenes]
+        if all(c.is_file() and c.stat().st_size > 0 for c in expected_clips):
+            status_cb("Resuming with existing scene clips...")
+            clips = expected_clips
+        else:
+            status_cb("Animating scenes locally with FFmpeg...")
+            clips = animate_images(images, plan, project_dir)
+            db.remember("animation", {"count": len(clips), "clips": [str(p) for p in clips]}, project_key, "latest")
+            for clip in clips:
+                db.remember_artifact(project_key, "clip", str(clip), {"temporary": True})
+            checkpoint.save("animated", {"count": len(clips)})
+            db.remember_checkpoint(project_key, "animated", {"count": len(clips)})
 
         status_cb("Mixing ASMR/SFX and rendering final MP4...")
         out, timeline, _ = render(clips, plan, project_dir)

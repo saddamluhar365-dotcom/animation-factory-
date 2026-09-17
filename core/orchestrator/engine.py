@@ -15,8 +15,19 @@ class ShortsEngine:
         self.projects = root / "projects"
         self.projects.mkdir(parents=True, exist_ok=True)
 
-    def create_project(self, instruction: str, duration: int, status_cb: Callable[[str], None] | None = None) -> Path:
+    def create_project(
+        self,
+        instruction: str,
+        duration: int,
+        status_cb: Callable[[str], None] | None = None,
+        project_dir: Path | None = None,
+    ) -> Path:
         if not instruction or not instruction.strip():
             raise ValueError("instruction is required")
         duration = validate_duration(duration)
-        return run_project(instruction.strip(), duration, status_cb or (lambda _status: None))
+        return run_project(
+            instruction.strip(),
+            duration,
+            status_cb or (lambda _status: None),
+            project_dir=project_dir,
+        )

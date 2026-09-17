@@ -44,3 +44,35 @@ class ProjectPlan:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ProjectPlan:
+        scenes = []
+        for s in data.get("scenes", []):
+            beats = [
+                SceneBeat(
+                    start=b["start"],
+                    end=b["end"],
+                    action=b["action"],
+                    camera=b.get("camera", "subtle push-in"),
+                )
+                for b in s.get("beats", [])
+            ]
+            scenes.append(
+                ScenePlan(
+                    index=s["index"],
+                    start=s["start"],
+                    end=s["end"],
+                    beats=beats,
+                    visual_prompt=s["visual_prompt"],
+                    audio_events=s.get("audio_events", []),
+                    continuity=s.get("continuity", {}),
+                )
+            )
+        return cls(
+            duration=data["duration"],
+            title=data.get("title", ""),
+            scenes=scenes,
+            style=data.get("style", {}),
+            character=data.get("character", {}),
+        )
