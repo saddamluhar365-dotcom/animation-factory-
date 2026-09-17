@@ -24,18 +24,10 @@ def test_gemini_uses_current_header_auth_and_current_model(monkeypatch):
     def fake_post(url, **kwargs):
         captured["url"] = url
         captured["kwargs"] = kwargs
-        return FakeResponse(
-            payload={
-                "candidates": [
-                    {"content": {"parts": [{"text": "OK"}]}}
-                ]
-            }
-        )
+        return FakeResponse(payload={"candidates": [{"content": {"parts": [{"text": "OK"}]}}]})
 
     monkeypatch.setattr(providers.requests, "post", fake_post)
-
     ok, message = providers.test_gemini("secret-key")
-
     assert ok is True
     assert message == "OK"
     assert captured["url"].endswith("/models/gemini-3.8-flash:generateContent")
@@ -46,21 +38,10 @@ def test_gemini_uses_current_header_auth_and_current_model(monkeypatch):
 
 def test_gemini_failure_returns_actionable_http_error(monkeypatch):
     def fake_post(url, **kwargs):
-        return FakeResponse(
-            status_code=403,
-            payload={
-                "error": {
-                    "code": 403,
-                    "status": "PERMISSION_DENIED",
-                    "message": "API key is not authorized for this API.",
-                }
-            },
-        )
+        return FakeResponse(status_code=403, payload={"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "API key is not authorized for this API."}})
 
     monkeypatch.setattr(providers.requests, "post", fake_post)
-
     ok, message = providers.test_gemini("bad-key")
-
     assert ok is False
     assert "HTTP 403" in message
     assert "PERMISSION_DENIED" in message
@@ -72,16 +53,9 @@ def test_gemini_text_returns_response_text(monkeypatch):
 
     def fake_post(url, **kwargs):
         assert kwargs["headers"]["x-goog-api-key"] == "secret-key"
-        return FakeResponse(
-            payload={
-                "candidates": [
-                    {"content": {"parts": [{"text": "Generated story"}]}}
-                ]
-            }
-        )
+        return FakeResponse(payload={"candidates": [{"content": {"parts": [{"text": "Generated story"}]}}]})
 
     monkeypatch.setattr(providers.requests, "post", fake_post)
-
     assert providers.gemini_text("make a short") == "Generated story"
 
 
@@ -89,26 +63,15 @@ def test_gemini_image_analysis_preserves_actionable_failure(monkeypatch):
     monkeypatch.setattr(providers, "get_keys", lambda provider: ["bad-key"])
 
     def fake_post(url, **kwargs):
-        return FakeResponse(
-            status_code=404,
-            payload={
-                "error": {
-                    "code": 404,
-                    "status": "NOT_FOUND",
-                    "message": "Model not found",
-                }
-            },
-        )
+        return FakeResponse(status_code=404, payload={"error": {"code": 404, "status": "NOT_FOUND", "message": "Model not found"}})
 
     monkeypatch.setattr(providers.requests, "post", fake_post)
-
     try:
         providers.gemini_image_analysis(b"image", "describe")
     except RuntimeError as exc:
         message = str(exc)
     else:
         raise AssertionError("Expected Gemini image analysis to fail")
-
     assert "HTTP 404" in message
     assert "NOT_FOUND" in message
     assert "Model not found" in message
