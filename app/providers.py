@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import time
 from typing import Any
 
 import requests
@@ -12,6 +13,15 @@ from .storage import get_keys, set_api
 TIMEOUT = 45
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+FALLBACK_GEMINI_MODELS = (
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+)
+RETRYABLE_GEMINI_STATUS = {429, 500, 502, 503, 504}
+MAX_GEMINI_RETRIES = 2
 
 
 def _gemini_model() -> str:
@@ -53,17 +63,98 @@ def _gemini_text_from_response(response: requests.Response) -> str:
         raise RuntimeError("Gemini returned an unexpected response format") from exc
 
 
-def _gemini_generate(key: str, contents: list[dict[str, Any]], timeout: int = TIMEOUT) -> requests.Response:
-    url = f"{GEMINI_BASE_URL}/models/{_gemini_model()}:generateContent"
-    return requests.post(url, headers=_gemini_headers(key), json={"contents": contents}, timeout=timeout)
+def _discover_gemini_models(key: str) -> list[str]:
+    """Return generateContent-capable models, preferring the configured model."""
+    preferred = _gemini_model()
+    try:
+        response = requests.get(
+            f"{GEMINI_BASE_URL}/models",
+            headers={"x-goog-api-key": key},
+            timeout=TIMEOUT,
+        )
+        if response.ok:
+            models = response.json().get("models", [])
+            discovered: list[str] = []
+            for item in models:
+                methods = item.get("supportedGenerationMethods", [])
+                name = str(item.get("name", "")).removeprefix("models/")
+                if name and "generateContent" in methods:
+                    discovered.append(name)
+            ordered = []
+            for name in (preferred, *FALLBACK_GEMINI_MODELS, *discovered):
+                if name in discovered and name not in ordered:
+                    ordered.append(name)
+            return ordered
+    except (requests.RequestException, ValueError, TypeError):
+        pass
+    return list(dict.fromkeys((preferred, *FALLBACK_GEMINI_MODELS)))
+
+
+def _gemini_generate(
+    key: str,
+    contents: list[dict[str, Any]],
+    model: str | None = None,
+    timeout: int = TIMEOUT,
+) -> requests.Response:
+    selected_model = model or _gemini_model()
+    url = f"{GEMINI_BASE_URL}/models/{selected_model}:generateContent"
+    last_response: requests.Response | None = None
+    for attempt in range(MAX_GEMINI_RETRIES + 1):
+        try:
+            response = requests.post(
+                url,
+                headers=_gemini_headers(key),
+                json={"contents": contents},
+                timeout=timeout,
+            )
+            last_response = response
+            if response.status_code not in RETRYABLE_GEMINI_STATUS or attempt >= MAX_GEMINI_RETRIES:
+                return response
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = min(8.0, max(0.5, float(retry_after))) if retry_after else min(8.0, 1.5**attempt)
+            except ValueError:
+                delay = min(8.0, 1.5**attempt)
+            time.sleep(delay)
+        except requests.RequestException:
+            if attempt >= MAX_GEMINI_RETRIES:
+                raise
+            time.sleep(min(8.0, 1.5**attempt))
+    if last_response is None:
+        raise RuntimeError("Gemini request produced no response")
+    return last_response
+
+
+def _gemini_request_with_fallback(
+    key: str,
+    contents: list[dict[str, Any]],
+    timeout: int,
+) -> tuple[requests.Response, str]:
+    last_response: requests.Response | None = None
+    last_model = _gemini_model()
+    for model in _discover_gemini_models(key):
+        response = _gemini_generate(key, contents, model=model, timeout=timeout)
+        last_response = response
+        last_model = model
+        if response.ok:
+            return response, model
+        if response.status_code not in RETRYABLE_GEMINI_STATUS:
+            return response, model
+    if last_response is None:
+        raise RuntimeError("Gemini model discovery returned no usable models")
+    return last_response, last_model
 
 
 def test_gemini(key: str) -> tuple[bool, str]:
     try:
-        response = _gemini_generate(key, [{"parts": [{"text": "Reply only OK."}]}], timeout=TIMEOUT)
+        response, model = _gemini_request_with_fallback(
+            key,
+            [{"parts": [{"text": "Reply only OK."}]}],
+            timeout=TIMEOUT,
+        )
         if not response.ok:
-            return False, _format_http_error(response)
-        return True, _gemini_text_from_response(response).strip() or "Gemini responded successfully"
+            return False, f"{_format_http_error(response)} [model={model}]"
+        return True, f"{_gemini_text_from_response(response).strip() or 'Gemini responded successfully'} [model={model}]"
     except requests.RequestException as exc:
         return False, f"Network error: {exc}"
     except RuntimeError as exc:
@@ -98,10 +189,14 @@ def gemini_text(prompt: str) -> str:
     last = "No Gemini key configured"
     for key in keys:
         try:
-            response = _gemini_generate(key, [{"parts": [{"text": prompt}]}], timeout=90)
+            response, model = _gemini_request_with_fallback(
+                key,
+                [{"parts": [{"text": prompt}]}],
+                timeout=90,
+            )
             if response.ok:
                 return _gemini_text_from_response(response)
-            last = _format_http_error(response)
+            last = f"{_format_http_error(response)} [model={model}]"
         except requests.RequestException as exc:
             last = f"Network error: {exc}"
         except RuntimeError as exc:
@@ -113,16 +208,13 @@ def gemini_image_analysis(image_bytes: bytes, prompt: str) -> str:
     keys = get_keys("gemini")
     encoded = base64.b64encode(image_bytes).decode()
     last = "No Gemini key configured"
+    contents = [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": encoded}}]}]
     for key in keys:
         try:
-            response = _gemini_generate(
-                key,
-                [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": encoded}}]}],
-                timeout=90,
-            )
+            response, model = _gemini_request_with_fallback(key, contents, timeout=90)
             if response.ok:
                 return _gemini_text_from_response(response)
-            last = _format_http_error(response)
+            last = f"{_format_http_error(response)} [model={model}]"
         except requests.RequestException as exc:
             last = f"Network error: {exc}"
         except RuntimeError as exc:
