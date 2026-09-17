@@ -12,14 +12,14 @@ class AudioEvent:
     duck_music: bool = False
 
     def __post_init__(self):
-        if self.start < 0 or self.end <= self.start:
-            raise ValueError("Audio event timestamps must be increasing")
         if not 0 <= self.volume <= 1:
             raise ValueError("Audio event volume must be between 0 and 1")
 
 
 class AudioTimeline:
     def __init__(self, duration: float):
+        if duration <= 0:
+            raise ValueError("Audio timeline duration must be positive")
         self.duration = float(duration)
         self.events: list[AudioEvent] = []
 
@@ -37,11 +37,15 @@ class AudioTimeline:
 
 def validate_events(events: list[AudioEvent], duration: float) -> list[str]:
     errors = []
+    if duration <= 0:
+        errors.append("duration must be positive")
+        return errors
     for event in events:
         if event.start < 0 or event.end <= event.start or event.end > duration + 0.001:
             errors.append(f"invalid audio event: {event.name}")
     music = [e for e in events if e.kind == "music"]
-    for a, b in zip(sorted(music), sorted(music)[1:]):
+    music.sort(key=lambda e: (e.start, e.end))
+    for a, b in zip(music, music[1:]):
         if b.start < a.end:
             errors.append("overlapping music events")
     return errors
