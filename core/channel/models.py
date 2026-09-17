@@ -100,12 +100,78 @@ class RecipeRecord:
 
 
 @dataclass
+class VideoDeepAnalysis:
+    youtube_video_id: str = ""
+    title: str = ""
+    resolution: list[int] = field(default_factory=lambda: [1080, 1920])
+    fps: float = 60.0
+    duration_seconds: float = 0.0
+    aspect_ratio: str = "9:16"
+    scene_structure: dict[str, Any] = field(default_factory=dict)
+    pacing: dict[str, Any] = field(default_factory=dict)
+    visual_style: dict[str, Any] = field(default_factory=dict)
+    consistency_anchors: list[str] = field(default_factory=list)
+    camera_movement: dict[str, Any] = field(default_factory=dict)
+    animation_motion_quality: dict[str, Any] = field(default_factory=dict)
+    story_structure: dict[str, Any] = field(default_factory=dict)
+    recipe_content_patterns: dict[str, Any] = field(default_factory=dict)
+    asmr_audio_profile: dict[str, Any] = field(default_factory=dict)
+    sfx_music_patterns: dict[str, Any] = field(default_factory=dict)
+    transitions: dict[str, Any] = field(default_factory=dict)
+    successful_characteristics: list[str] = field(default_factory=list)
+    weak_patterns_identified: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ChannelDNA:
     channel_profile_id: int | None = None
     dna_profile: dict[str, Any] = field(default_factory=dict)
     saturation_metrics: dict[str, Any] = field(default_factory=dict)
     version: int = 1
     updated_at: str | None = None
+
+    @property
+    def winning_style_dna(self) -> dict[str, Any]:
+        return self.dna_profile.get("winning_style_dna") or {}
+
+    @property
+    def content_recipe_dna(self) -> dict[str, Any]:
+        return self.dna_profile.get("content_recipe_dna") or {}
+
+    @property
+    def visual_dna(self) -> dict[str, Any]:
+        return self.dna_profile.get("visual_dna") or {}
+
+    @property
+    def animation_dna(self) -> dict[str, Any]:
+        return self.dna_profile.get("animation_dna") or {}
+
+    @property
+    def audio_asmr_dna(self) -> dict[str, Any]:
+        return self.dna_profile.get("audio_asmr_dna") or {}
+
+    @property
+    def pacing_dna(self) -> dict[str, Any]:
+        return self.dna_profile.get("pacing_dna") or {}
+
+    @property
+    def story_dna(self) -> dict[str, Any]:
+        return self.dna_profile.get("story_dna") or {}
+
+    @property
+    def quality_rules(self) -> list[str]:
+        return self.dna_profile.get("quality_rules") or []
+
+    @property
+    def avoid_bad_patterns(self) -> list[str]:
+        return self.dna_profile.get("avoid_bad_patterns") or []
+
+    @property
+    def previously_used_recipes(self) -> list[str]:
+        return self.dna_profile.get("previously_used_recipes") or []
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

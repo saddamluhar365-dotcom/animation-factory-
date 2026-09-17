@@ -42,6 +42,7 @@ class MemoryDB:
                 "CREATE TABLE IF NOT EXISTS channel_dna (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, dna_profile TEXT NOT NULL DEFAULT '{}', saturation_metrics TEXT NOT NULL DEFAULT '{}', version INTEGER DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(channel_profile_id))",
                 "CREATE TABLE IF NOT EXISTS channel_improvement_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, area TEXT NOT NULL, observation TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT '{}', recommendation TEXT NOT NULL, confidence REAL DEFAULT 1.0, status TEXT DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS video_performance_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_video_id INTEGER REFERENCES channel_videos(id) ON DELETE CASCADE, views INTEGER DEFAULT 0, likes INTEGER DEFAULT 0, comments INTEGER DEFAULT 0, velocity_score REAL DEFAULT 0.0, retrieved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                "CREATE TABLE IF NOT EXISTS channel_video_analyses (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_profile_id INTEGER REFERENCES channel_profiles(id) ON DELETE CASCADE, channel_video_id INTEGER REFERENCES channel_videos(id) ON DELETE CASCADE, youtube_video_id TEXT NOT NULL, analysis TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(channel_profile_id, youtube_video_id))",
             ]
         else:
             statements = [
@@ -58,6 +59,7 @@ class MemoryDB:
                 "CREATE TABLE IF NOT EXISTS channel_dna (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, dna_profile JSONB NOT NULL DEFAULT '{}'::jsonb, saturation_metrics JSONB NOT NULL DEFAULT '{}'::jsonb, version INTEGER DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(channel_profile_id))",
                 "CREATE TABLE IF NOT EXISTS channel_improvement_memory (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, area TEXT NOT NULL, observation TEXT NOT NULL, evidence JSONB NOT NULL DEFAULT '{}'::jsonb, recommendation TEXT NOT NULL, confidence REAL DEFAULT 1.0, status TEXT DEFAULT 'active', created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
                 "CREATE TABLE IF NOT EXISTS video_performance_memory (id BIGSERIAL PRIMARY KEY, channel_video_id BIGINT REFERENCES channel_videos(id) ON DELETE CASCADE, views INTEGER DEFAULT 0, likes INTEGER DEFAULT 0, comments INTEGER DEFAULT 0, velocity_score REAL DEFAULT 0.0, retrieved_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+                "CREATE TABLE IF NOT EXISTS channel_video_analyses (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, channel_video_id BIGINT REFERENCES channel_videos(id) ON DELETE CASCADE, youtube_video_id TEXT NOT NULL, analysis JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(channel_profile_id, youtube_video_id))",
             ]
         with self.engine.begin() as conn:
             for statement in statements:
@@ -68,6 +70,7 @@ class MemoryDB:
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_channel_videos_channel ON channel_videos(channel_profile_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recipe_memory_norm ON recipe_memory(channel_profile_id, normalized_recipe_name)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recipe_memory_ing ON recipe_memory(primary_ingredient)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_channel_analyses_profile ON channel_video_analyses(channel_profile_id)"))
 
     def initialize(self) -> None:
         if self._initialized:
@@ -725,6 +728,7 @@ class MemoryDB:
             v_count = conn.execute(text("SELECT COUNT(*) FROM channel_videos WHERE channel_profile_id = :cid"), {"cid": channel_profile_id}).scalar() or 0
             s_count = conn.execute(text("SELECT COUNT(*) FROM channel_videos WHERE channel_profile_id = :cid AND is_short = 1"), {"cid": channel_profile_id}).scalar() or 0
             r_count = conn.execute(text("SELECT COUNT(*) FROM recipe_memory WHERE channel_profile_id = :cid"), {"cid": channel_profile_id}).scalar() or 0
+            a_count = conn.execute(text("SELECT COUNT(*) FROM channel_video_analyses WHERE channel_profile_id = :cid"), {"cid": channel_profile_id}).scalar() or 0
             has_dna = bool(conn.execute(text("SELECT 1 FROM channel_dna WHERE channel_profile_id = :cid LIMIT 1"), {"cid": channel_profile_id}).scalar())
             profile = conn.execute(text("SELECT last_synced_at, title, handle, uploads_playlist_id FROM channel_profiles WHERE id = :cid"), {"cid": channel_profile_id}).mappings().first()
 
@@ -737,6 +741,62 @@ class MemoryDB:
             "video_count": v_count,
             "shorts_count": s_count,
             "recipe_count": r_count,
+            "analyzed_shorts_count": a_count,
             "has_dna": has_dna,
         }
+
+    def save_video_analysis(
+        self,
+        channel_profile_id: int,
+        channel_video_id: int | None,
+        youtube_video_id: str,
+        analysis: dict[str, Any],
+    ) -> int:
+        self.initialize()
+        cid = int(channel_profile_id)
+        vid = channel_video_id
+        yt_id = str(youtube_video_id).strip()
+        analysis_json = self._json(analysis)
+
+        with self.engine.begin() as conn:
+            if self.dialect == "sqlite":
+                res = conn.execute(text("""
+                    INSERT INTO channel_video_analyses (
+                        channel_profile_id, channel_video_id, youtube_video_id, analysis, created_at
+                    ) VALUES (
+                        :cid, :vid, :yt_id, :analysis, CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT(channel_profile_id, youtube_video_id) DO UPDATE SET
+                        channel_video_id = CASE WHEN excluded.channel_video_id IS NOT NULL THEN excluded.channel_video_id ELSE channel_video_analyses.channel_video_id END,
+                        analysis = excluded.analysis,
+                        created_at = CURRENT_TIMESTAMP
+                """), {"cid": cid, "vid": vid, "yt_id": yt_id, "analysis": analysis_json})
+                return res.lastrowid or 0
+            else:
+                res = conn.execute(text("""
+                    INSERT INTO channel_video_analyses (
+                        channel_profile_id, channel_video_id, youtube_video_id, analysis, created_at
+                    ) VALUES (
+                        :cid, :vid, :yt_id, CAST(:analysis AS jsonb), now()
+                    )
+                    ON CONFLICT(channel_profile_id, youtube_video_id) DO UPDATE SET
+                        channel_video_id = CASE WHEN EXCLUDED.channel_video_id IS NOT NULL THEN EXCLUDED.channel_video_id ELSE channel_video_analyses.channel_video_id END,
+                        analysis = EXCLUDED.analysis,
+                        created_at = now()
+                    RETURNING id
+                """), {"cid": cid, "vid": vid, "yt_id": yt_id, "analysis": analysis_json})
+                row = res.first()
+                return row[0] if row else 0
+
+    def get_video_analyses(self, channel_profile_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        self.initialize()
+        sql = "SELECT * FROM channel_video_analyses WHERE channel_profile_id = :cid ORDER BY created_at DESC LIMIT :limit"
+        with self.engine.begin() as conn:
+            rows = conn.execute(text(sql), {"cid": channel_profile_id, "limit": limit}).mappings().all()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["analysis"] = self._decode_json(d.get("analysis"))
+            results.append(d)
+        return results
 

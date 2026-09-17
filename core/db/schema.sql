@@ -9,3 +9,5 @@ CREATE INDEX IF NOT EXISTS idx_research_retrieved ON research_items(retrieved_at
 CREATE INDEX IF NOT EXISTS idx_engine_memory_project ON engine_memory(project_key);
 CREATE INDEX IF NOT EXISTS idx_engine_memory_type ON engine_memory(memory_type);
 CREATE INDEX IF NOT EXISTS idx_engine_memory_created ON engine_memory(created_at DESC);
+CREATE TABLE IF NOT EXISTS channel_video_analyses (id BIGSERIAL PRIMARY KEY, channel_profile_id BIGINT REFERENCES channel_profiles(id) ON DELETE CASCADE, channel_video_id BIGINT REFERENCES channel_videos(id) ON DELETE CASCADE, youtube_video_id TEXT NOT NULL, analysis JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(channel_profile_id, youtube_video_id));
+CREATE INDEX IF NOT EXISTS idx_channel_analyses_profile ON channel_video_analyses(channel_profile_id);
