@@ -236,15 +236,31 @@ def run_project(
                 plan = None
 
         if plan is None:
-            status_cb("Researching the requested topic...")
-            research = tavily_search(instruction)
-            for item in research:
-                db.remember_research({"url": item.get("url"), "title": item.get("title"), "topic": instruction, "summary": item.get("content") or item.get("snippet"), "evidence": item})
-            db.remember("research_batch", {"query": instruction, "count": len(research), "retrieved_at": datetime.now(timezone.utc).isoformat()}, project_key, "latest")
-            db.remember_decision(project_key, {"key": "research", "provider": "tavily", "result_count": len(research), "fallback": not bool(research)})
+            active_channel = db.get_channel_profile()
+            cfg = load_config()
+            manual_ref = cfg.get("reference_profile")
 
-            status_cb("Planning story, scenes and synchronized audio...")
-            plan = make_plan(instruction, duration, research)
+            if active_channel or not (instruction or "").strip():
+                from core.channel.planner import ChannelAwarePlanner
+                channel_planner = ChannelAwarePlanner(db)
+                plan = channel_planner.create_plan(
+                    duration=duration,
+                    prompt=instruction if (instruction or "").strip() else None,
+                    channel_profile=active_channel,
+                    manual_references=manual_ref,
+                    status_cb=status_cb,
+                )
+            else:
+                status_cb("Researching the requested topic...")
+                research = tavily_search(instruction)
+                for item in research:
+                    db.remember_research({"url": item.get("url"), "title": item.get("title"), "topic": instruction, "summary": item.get("content") or item.get("snippet"), "evidence": item})
+                db.remember("research_batch", {"query": instruction, "count": len(research), "retrieved_at": datetime.now(timezone.utc).isoformat()}, project_key, "latest")
+                db.remember_decision(project_key, {"key": "research", "provider": "tavily", "result_count": len(research), "fallback": not bool(research)})
+
+                status_cb("Planning story, scenes and synchronized audio...")
+                plan = make_plan(instruction, duration, research)
+
             plan_data = plan.to_dict()
             continuity_errors = validate_plan_continuity(plan)
             if continuity_errors:

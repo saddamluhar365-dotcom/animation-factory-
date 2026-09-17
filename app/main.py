@@ -10,6 +10,7 @@ from .providers import register
 from .reference import analyze_reference, download_reference_url, save_reference_profile
 from .pipeline import run_project
 from .ui_dispatch import UiEventBridge
+from core.db.memory import MemoryDB
 
 PROVIDERS = [("Gemini", "gemini"), ("Hugging Face", "huggingface"), ("Tavily", "tavily")]
 
@@ -58,6 +59,7 @@ class App(tk.Tk):
         ttk.Spinbox(row, from_=1, to=180, textvariable=self.duration, width=8).pack(side="left", padx=8)
         ttk.Button(row, text="Generate Short", command=self.generate).pack(side="left", padx=12)
         ttk.Button(row, text="Reference Shorts", command=self.reference_setup).pack(side="left")
+        ttk.Button(row, text="Channel Intelligence", command=self.channel_setup).pack(side="left", padx=8)
 
         self.log = tk.Text(main, height=16, state="disabled")
         self.log.pack(fill="both", expand=True, pady=12)
@@ -258,11 +260,185 @@ class App(tk.Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def channel_setup(self):
+        win = tk.Toplevel(self)
+        win.title("Channel Intelligence")
+        win.geometry("820x680")
+        win.transient(self)
+        win.grab_set()
+
+        ttk.Label(win, text="Permanent Channel Intelligence", font=("Segoe UI", 16, "bold")).pack(pady=12)
+        ttk.Label(
+            win,
+            text="Connect your permanent YouTube channel handle. Shorts, recipes, and Channel DNA are automatically synchronized into PostgreSQL.",
+        ).pack(pady=4)
+
+        db = MemoryDB()
+        active_prof = db.get_channel_profile() or {}
+
+        # Handle entry & Connect button
+        conn_frame = ttk.LabelFrame(win, text="YouTube Channel", padding=10)
+        conn_frame.pack(fill="x", padx=15, pady=8)
+
+        ttk.Label(conn_frame, text="Channel Handle / URL:").pack(side="left", padx=5)
+        handle_var = tk.StringVar(value=active_prof.get("handle", ""))
+        handle_entry = ttk.Entry(conn_frame, textvariable=handle_var, width=35)
+        handle_entry.pack(side="left", padx=5)
+
+        status_lbl = ttk.Label(conn_frame, text="Connected" if active_prof else "Not connected")
+        status_lbl.pack(side="left", padx=10)
+
+        # Stats Card
+        stats_frame = ttk.LabelFrame(win, text="Channel Intelligence State", padding=10)
+        stats_frame.pack(fill="x", padx=15, pady=8)
+
+        stats_var = tk.StringVar()
+
+        def refresh_stats():
+            p = db.get_channel_profile()
+            if not p:
+                stats_var.set("No channel connected.")
+                return
+            stats = db.get_channel_stats(p["id"])
+            dna_status = "Available" if stats["has_dna"] else "Pending"
+            last_sync = stats["last_synced_at"] or "Never"
+            stats_var.set(
+                f"Channel: {stats['title']} ({stats['handle']})\n"
+                f"Uploads Playlist: {stats['uploads_playlist_id'] or 'N/A'}\n"
+                f"Videos: {stats['video_count']} | Shorts: {stats['shorts_count']} | Recipes in Memory: {stats['recipe_count']}\n"
+                f"Channel DNA: {dna_status} | Last Synced: {last_sync}"
+            )
+
+        refresh_stats()
+        ttk.Label(stats_frame, textvariable=stats_var, justify="left", font=("Consolas", 10)).pack(anchor="w")
+
+        def connect():
+            raw_h = handle_var.get().strip()
+            if not raw_h:
+                messagebox.showwarning("Channel", "Enter a YouTube handle or URL.")
+                return
+            status_lbl.config(text="Resolving...")
+
+            def work():
+                try:
+                    from core.channel.resolver import ChannelResolver
+                    resolver = ChannelResolver()
+                    resolved = resolver.resolve(raw_h)
+                    saved = db.save_channel_profile(resolved.to_dict())
+                    def done():
+                        status_lbl.config(text="✓ Connected")
+                        refresh_stats()
+                        self.write_log(f"Connected channel: {saved.get('title')} ({saved.get('handle')})")
+                    self._post_ui(done)
+                except Exception as exc:
+                    self._post_ui(lambda e=str(exc): messagebox.showerror("Connection failed", e))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        ttk.Button(conn_frame, text="CONNECT CHANNEL", command=connect).pack(side="right", padx=5)
+
+        # Actions frame
+        actions_frame = ttk.LabelFrame(win, text="Intelligence Operations", padding=10)
+        actions_frame.pack(fill="x", padx=15, pady=8)
+
+        def sync_now():
+            p = db.get_channel_profile()
+            if not p:
+                messagebox.showwarning("Channel", "Connect a channel first.")
+                return
+            self.write_log(f"Syncing videos for {p['handle']}...")
+
+            def work():
+                try:
+                    from core.channel.sync import ChannelSyncEngine
+                    syncer = ChannelSyncEngine(db)
+                    res = syncer.sync_channel(p)
+                    def done():
+                        refresh_stats()
+                        self.write_log(f"Sync completed: {res.videos_added} new videos added, {res.shorts_added} Shorts.")
+                        messagebox.showinfo("Sync Complete", f"Discovered {res.videos_discovered} videos.\nAdded {res.videos_added} videos.")
+                    self._post_ui(done)
+                except Exception as exc:
+                    self._post_ui(lambda e=str(exc): messagebox.showerror("Sync failed", e))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def analyze_now():
+            p = db.get_channel_profile()
+            if not p:
+                messagebox.showwarning("Channel", "Connect a channel first.")
+                return
+            self.write_log(f"Extracting recipes & computing Channel DNA for {p['handle']}...")
+
+            def work():
+                try:
+                    from core.channel.recipe_extractor import RecipeExtractor
+                    from core.channel.dna import ChannelDNAEngine
+                    from core.channel.improvement import ImprovementEngine
+
+                    extractor = RecipeExtractor(db)
+                    videos = db.get_channel_videos(p["id"])
+                    for v in videos:
+                        extractor.extract_and_save(p["id"], v)
+
+                    dna_engine = ChannelDNAEngine(db)
+                    dna_res = dna_engine.generate_dna(p["id"])
+
+                    imp_engine = ImprovementEngine(db)
+                    imp_engine.generate_recommendations(p["id"])
+
+                    def done():
+                        refresh_stats()
+                        self.write_log(f"Channel DNA and recipes analyzed for {p['handle']}.")
+                        messagebox.showinfo("Analysis Complete", f"Recipes analyzed: {dna_res.dna_profile.get('total_recipes_analyzed', 0)}\nChannel DNA updated.")
+                    self._post_ui(done)
+                except Exception as exc:
+                    self._post_ui(lambda e=str(exc): messagebox.showerror("Analysis failed", e))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def view_recipes():
+            p = db.get_channel_profile()
+            if not p:
+                messagebox.showwarning("Channel", "Connect a channel first.")
+                return
+            recs = db.get_recipes(p["id"])
+            if not recs:
+                messagebox.showinfo("Recipe Memory", "No recipes currently extracted. Click 'ANALYZE RECIPES & DNA'.")
+                return
+            lines = [f"• {r['recipe_name']} ({r.get('cuisine', '')} - {r.get('primary_ingredient', '')})" for r in recs[:20]]
+            messagebox.showinfo("Recipe Memory (Top 20)", "\n".join(lines))
+
+        def view_signals():
+            p = db.get_channel_profile()
+            if not p:
+                messagebox.showwarning("Channel", "Connect a channel first.")
+                return
+            signals = db.get_improvement_signals(p["id"])
+            if not signals:
+                messagebox.showinfo("Improvement Signals", "No signals recorded yet. Click 'ANALYZE RECIPES & DNA'.")
+                return
+            lines = [f"[{s['area'].upper()}] {s['recommendation']}" for s in signals[:5]]
+            messagebox.showinfo("Improvement Signals", "\n\n".join(lines))
+
+        act_btn_row = ttk.Frame(actions_frame)
+        act_btn_row.pack(fill="x", pady=4)
+        ttk.Button(act_btn_row, text="SYNC CHANNEL NOW", command=sync_now).pack(side="left", padx=5)
+        ttk.Button(act_btn_row, text="ANALYZE RECIPES & DNA", command=analyze_now).pack(side="left", padx=5)
+        ttk.Button(act_btn_row, text="VIEW RECIPE MEMORY", command=view_recipes).pack(side="left", padx=5)
+        ttk.Button(act_btn_row, text="VIEW IMPROVEMENTS", command=view_signals).pack(side="left", padx=5)
+
+        ttk.Button(win, text="CLOSE", command=win.destroy).pack(pady=15)
+
     def generate(self):
         instruction = self.prompt.get("1.0", "end").strip()
-        if not instruction:
-            messagebox.showwarning("Prompt", "Describe the Short first.")
+        db = MemoryDB()
+        active_prof = db.get_channel_profile()
+
+        if not instruction and not active_prof:
+            messagebox.showwarning("Prompt", "Describe the Short first, or connect a YouTube Channel in Channel Intelligence.")
             return
+
         duration = int(self.duration.get())
 
         def work():
