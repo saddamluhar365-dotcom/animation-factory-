@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from core.channel.auto_reference import AutoReferenceEngine
+from core.channel.content_gap import ContentGapEngine
+from core.channel.dna import ChannelDNAEngine
+from core.channel.improvement import ImprovementEngine
+from core.channel.models import (
+    ChannelDNA,
+    ChannelProfile,
+    ChannelVideo,
+    ImprovementRecord,
+    NoveltyStatus,
+    NoveltyVerdict,
+    RecipeRecord,
+    SyncResult,
+)
+from core.channel.novelty import RecipeNoveltyEngine
+from core.channel.planner import ChannelAwarePlanner
+from core.channel.recipe_extractor import RecipeExtractor, normalize_recipe_name
+from core.channel.resolver import ChannelResolver, normalize_handle
+from core.channel.sync import ChannelSyncEngine
+
+__all__ = [
+    "AutoReferenceEngine",
+    "ChannelAwarePlanner",
+    "ChannelDNA",
+    "ChannelDNAEngine",
+    "ChannelProfile",
+    "ChannelResolver",
+    "ChannelSyncEngine",
+    "ChannelVideo",
+    "ContentGapEngine",
+    "ImprovementEngine",
+    "ImprovementRecord",
+    "NoveltyStatus",
+    "NoveltyVerdict",
+    "RecipeExtractor",
+    "RecipeNoveltyEngine",
+    "RecipeRecord",
+    "SyncResult",
+    "normalize_handle",
+    "normalize_recipe_name",
+]

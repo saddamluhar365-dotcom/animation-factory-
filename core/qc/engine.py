@@ -26,7 +26,25 @@ def validate_output(path: Path, requested_duration: float, tolerance: float = 0.
         fmt = raw.get("format", {})
         video = next((s for s in raw.get("streams", []) if s.get("codec_type") == "video"), {})
         audio = next((s for s in raw.get("streams", []) if s.get("codec_type") == "audio"), {})
-        meta = {"duration": float(fmt.get("duration", 0) or 0), "width": video.get("width"), "height": video.get("height"), "video_codec": video.get("codec_name"), "audio_codec": audio.get("codec_name"), "has_audio": bool(audio)}
+        r_fps = video.get("r_frame_rate", "")
+        fps = None
+        if r_fps and "/" in r_fps:
+            try:
+                num, den = r_fps.split("/")
+                fps = float(num) / float(den) if float(den) else None
+            except (ValueError, ZeroDivisionError):
+                pass
+        meta = {
+            "duration": float(fmt.get("duration", 0) or 0),
+            "video_duration": float(video.get("duration") or fmt.get("duration") or 0),
+            "audio_duration": float(audio.get("duration") or fmt.get("duration") or 0) if audio else 0.0,
+            "width": video.get("width"),
+            "height": video.get("height"),
+            "fps": fps,
+            "video_codec": video.get("codec_name"),
+            "audio_codec": audio.get("codec_name"),
+            "has_audio": bool(audio),
+        }
         errors = validate_metadata(meta, requested_duration, tolerance)
         if meta["has_audio"]:
             errors.extend(_audio_clipping_check(path))

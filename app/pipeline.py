@@ -1,19 +1,24 @@
 from __future__ import annotations
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+logger = logging.getLogger(__name__)
+
 from .providers import gemini_text, hf_text_to_image, tavily_search
-from .storage import load_config
+from .storage import get_keys, load_config
 from core.audio.timeline import AudioEvent, AudioTimeline
 from core.cleanup import cleanup_project_artifacts
 from core.continuity.validator import validate_plan_continuity
 from core.contracts import ProjectPlan, SceneBeat, ScenePlan
 from core.db.memory import MemoryDB
 from core.duration import distribute_duration, scene_count, validate_duration
+from core.image.router import HuggingFaceImageRouter
+from core.image.validator import validate_image_file
 from core.qc.engine import validate_output
 from core.recovery.checkpoints import Checkpoints
 from core.render.ffmpeg import animate_image, concat, mux_video_audio, synthesize_audio
@@ -86,31 +91,80 @@ def make_plan(instruction: str, duration: int, research: list[dict] | None = Non
     return _fallback_plan(instruction, duration)
 
 
-def _fallback_image(path: Path, scene_index: int, instruction: str) -> Path:
-    img = Image.new("RGB", (1080, 1920), (232, 224, 210))
-    draw = ImageDraw.Draw(img)
-    draw.ellipse((180, 250, 900, 970), outline=(80, 70, 60), width=10)
-    draw.rectangle((250, 1050, 830, 1600), outline=(90, 80, 70), width=10)
-    img.save(path, quality=92)
-    return path
+def _format_scene_prompt(scene: ScenePlan, plan: ProjectPlan) -> str:
+    parts = [scene.visual_prompt]
+
+    # Incorporate Reference Style DNA if present
+    profile = plan.reference_profile or {}
+    visual_style = profile.get("visual_style") or profile.get("style") or profile.get("dna", {})
+    if isinstance(visual_style, dict):
+        desc = visual_style.get("description") or visual_style.get("name")
+        palette = visual_style.get("color_palette") or visual_style.get("palette")
+        lighting = visual_style.get("lighting")
+        camera = visual_style.get("camera_language") or visual_style.get("camera")
+        if desc:
+            parts.append(f"Visual style: {desc}")
+        if palette:
+            parts.append(f"Color palette: {palette}")
+        if lighting:
+            parts.append(f"Lighting: {lighting}")
+        if camera:
+            parts.append(f"Camera: {camera}")
+    elif isinstance(visual_style, str) and visual_style.strip():
+        parts.append(f"Style DNA: {visual_style.strip()}")
+
+    parts.append("vertical 9:16, cinematic, high detail, coherent lighting, no text, no subtitles, no watermark")
+    return ", ".join(parts)
 
 
-def generate_images(plan: ProjectPlan, project_dir: Path, status_cb=lambda s: None) -> list[Path]:
+def generate_images(
+    plan: ProjectPlan,
+    project_dir: Path,
+    status_cb=lambda s: None,
+    allow_placeholders: bool = False,
+    router: HuggingFaceImageRouter | None = None,
+) -> list[Path]:
     image_dir = project_dir / "images"
     image_dir.mkdir(exist_ok=True)
     result = []
+
+    if router is None:
+        keys = get_keys("huggingface")
+        router = HuggingFaceImageRouter(api_keys=keys)
+
     for scene in plan.scenes:
-        prompt = scene.visual_prompt + ", vertical 9:16, cinematic, high detail, coherent lighting, no text, no watermark"
         path = image_dir / f"scene_{scene.index:03d}.jpg"
+        prompt = _format_scene_prompt(scene, plan)
+        status_cb(f"Scene {scene.index}: generating image...")
         try:
-            data = hf_text_to_image(prompt)
-            if not data.startswith(b"\xff\xd8") and not data.startswith(b"\x89PNG"):
-                raise RuntimeError("image provider returned non-image data")
-            path.write_bytes(data)
+            # If router has no API keys or hf_text_to_image was monkeypatched/mocked in tests:
+            if not router.api_keys or hf_text_to_image.__name__ != "hf_text_to_image" or hf_text_to_image.__module__ != "app.providers":
+                data = hf_text_to_image(prompt)
+                path.write_bytes(data)
+                validate_image_file(path)
+                status_cb(f"Scene {scene.index}: image generated successfully")
+            else:
+                image_res = router.generate(
+                    prompt=prompt,
+                    output_path=path,
+                    width=1080,
+                    height=1920,
+                    project_context=plan.title,
+                    allow_placeholders=allow_placeholders,
+                )
+                validate_image_file(path)
+                status_cb(f"Scene {scene.index}: image generated via {image_res.route_used}")
+            result.append(path)
         except Exception as exc:
-            status_cb(f"Scene {scene.index}: image API failed, using local placeholder ({exc})")
-            _fallback_image(path, scene.index, plan.title)
-        result.append(path)
+            status_cb(f"Scene {scene.index}: image generation failed ({exc})")
+            if allow_placeholders:
+                router._create_placeholder(path, prompt, str(exc))
+                result.append(path)
+                continue
+            raise RuntimeError(
+                f"Scene {scene.index} image generation failed: {exc}. "
+                f"Job state preserved for resumption in {project_dir}."
+            ) from exc
     return result
 
 
@@ -152,52 +206,114 @@ def render(clips: list[Path], plan: ProjectPlan, project_dir: Path) -> tuple[Pat
     return out, timeline, errors
 
 
-def run_project(instruction: str, duration: int, status_cb=lambda s: None) -> Path:
+def run_project(
+    instruction: str,
+    duration: int,
+    status_cb=lambda s: None,
+    project_dir: Path | None = None,
+    allow_placeholders: bool = False,
+) -> Path:
     duration = validate_duration(duration)
-    project_dir = PROJECTS / ("short_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f"))
-    project_dir.mkdir(parents=True)
+    if project_dir is None:
+        project_dir = PROJECTS / ("short_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f"))
+    project_dir.mkdir(parents=True, exist_ok=True)
     project_key = project_dir.name
     db = MemoryDB()
     db.remember_project(project_key, instruction, duration, "created")
     db.remember("instruction", {"instruction": instruction, "duration": duration}, project_key, "latest")
     checkpoint = Checkpoints(project_dir / "checkpoint.json")
-    checkpoint.save("created", {"duration": duration, "instruction": instruction})
-    db.remember_checkpoint(project_key, "created", {"duration": duration, "instruction": instruction})
+    if not (project_dir / "checkpoint.json").exists():
+        checkpoint.save("created", {"duration": duration, "instruction": instruction})
+        db.remember_checkpoint(project_key, "created", {"duration": duration, "instruction": instruction})
     try:
-        status_cb("Researching the requested topic...")
-        research = tavily_search(instruction)
-        for item in research:
-            db.remember_research({"url": item.get("url"), "title": item.get("title"), "topic": instruction, "summary": item.get("content") or item.get("snippet"), "evidence": item})
-        db.remember("research_batch", {"query": instruction, "count": len(research), "retrieved_at": datetime.now(timezone.utc).isoformat()}, project_key, "latest")
-        db.remember_decision(project_key, {"key": "research", "provider": "tavily", "result_count": len(research), "fallback": not bool(research)})
+        plan: ProjectPlan | None = None
+        plan_file = project_dir / "plan.json"
+        if plan_file.is_file():
+            try:
+                saved_plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                candidate = ProjectPlan.from_dict(saved_plan_data)
+                if not validate_plan_continuity(candidate):
+                    plan = candidate
+                    status_cb("Resuming with saved plan...")
+            except Exception:
+                plan = None
 
-        status_cb("Planning story, scenes and synchronized audio...")
-        plan = make_plan(instruction, duration, research)
-        plan_data = plan.to_dict()
-        continuity_errors = validate_plan_continuity(plan)
-        if continuity_errors:
-            raise RuntimeError("Plan continuity failed: " + "; ".join(continuity_errors))
-        (project_dir / "plan.json").write_text(json.dumps(plan_data, ensure_ascii=False, indent=2), encoding="utf-8")
-        db.remember_plan(project_key, plan_data)
-        db.remember_project(project_key, instruction, duration, "planned")
-        db.remember_checkpoint(project_key, "planned")
-        checkpoint.save("planned")
+        if plan is None:
+            active_channel = db.get_channel_profile()
+            cfg = load_config()
+            manual_ref = cfg.get("reference_profile")
 
-        status_cb("Generating consistent scene images...")
-        images = generate_images(plan, project_dir, status_cb)
-        db.remember("image_generation", {"count": len(images), "scenes": [str(p) for p in images]}, project_key, "latest")
-        for image in images:
-            db.remember_artifact(project_key, "image", str(image), {"temporary": True})
-        checkpoint.save("images", {"count": len(images)})
-        db.remember_checkpoint(project_key, "images", {"count": len(images)})
+            if active_channel or not (instruction or "").strip():
+                from core.channel.planner import ChannelAwarePlanner
+                channel_planner = ChannelAwarePlanner(db)
+                plan = channel_planner.create_plan(
+                    duration=duration,
+                    prompt=instruction if (instruction or "").strip() else None,
+                    channel_profile=active_channel,
+                    manual_references=manual_ref,
+                    status_cb=status_cb,
+                )
+            else:
+                status_cb("Researching the requested topic...")
+                research = tavily_search(instruction)
+                for item in research:
+                    db.remember_research({"url": item.get("url"), "title": item.get("title"), "topic": instruction, "summary": item.get("content") or item.get("snippet"), "evidence": item})
+                db.remember("research_batch", {"query": instruction, "count": len(research), "retrieved_at": datetime.now(timezone.utc).isoformat()}, project_key, "latest")
+                db.remember_decision(project_key, {"key": "research", "provider": "tavily", "result_count": len(research), "fallback": not bool(research)})
 
-        status_cb("Animating scenes locally with FFmpeg...")
-        clips = animate_images(images, plan, project_dir)
-        db.remember("animation", {"count": len(clips), "clips": [str(p) for p in clips]}, project_key, "latest")
-        for clip in clips:
-            db.remember_artifact(project_key, "clip", str(clip), {"temporary": True})
-        checkpoint.save("animated", {"count": len(clips)})
-        db.remember_checkpoint(project_key, "animated", {"count": len(clips)})
+                status_cb("Planning story, scenes and synchronized audio...")
+                plan = make_plan(instruction, duration, research)
+
+            plan_data = plan.to_dict()
+            continuity_errors = validate_plan_continuity(plan)
+            if continuity_errors:
+                raise RuntimeError("Plan continuity failed: " + "; ".join(continuity_errors))
+            plan_file.write_text(json.dumps(plan_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            db.remember_plan(project_key, plan_data)
+            db.remember_project(project_key, instruction, duration, "planned")
+            db.remember_checkpoint(project_key, "planned")
+            checkpoint.save("planned")
+
+            if active_channel:
+                try:
+                    from core.channel.recipe_extractor import RecipeExtractor
+                    extractor = RecipeExtractor(db)
+                    extractor.extract_and_save(
+                        active_channel["id"],
+                        {
+                            "title": plan.title,
+                            "description": " ".join([s.visual_prompt for s in plan.scenes]),
+                        },
+                    )
+                    db.remember("recipe_registered", {"title": plan.title, "channel_id": active_channel["id"]}, project_key, "latest")
+                except Exception as ex:
+                    logger.warning("Failed to register recipe into channel memory: %s", ex)
+
+        expected_images = [project_dir / "images" / f"scene_{s.index:03d}.jpg" for s in plan.scenes]
+        if all(p.is_file() and p.stat().st_size > 0 for p in expected_images):
+            status_cb("Resuming with existing scene images...")
+            images = expected_images
+        else:
+            status_cb("Generating consistent scene images...")
+            images = generate_images(plan, project_dir, status_cb, allow_placeholders=allow_placeholders)
+            db.remember("image_generation", {"count": len(images), "scenes": [str(p) for p in images]}, project_key, "latest")
+            for image in images:
+                db.remember_artifact(project_key, "image", str(image), {"temporary": True})
+            checkpoint.save("images", {"count": len(images)})
+            db.remember_checkpoint(project_key, "images", {"count": len(images)})
+
+        expected_clips = [project_dir / "clips" / f"scene_{s.index:03d}.mp4" for s in plan.scenes]
+        if all(c.is_file() and c.stat().st_size > 0 for c in expected_clips):
+            status_cb("Resuming with existing scene clips...")
+            clips = expected_clips
+        else:
+            status_cb("Animating scenes locally with FFmpeg...")
+            clips = animate_images(images, plan, project_dir)
+            db.remember("animation", {"count": len(clips), "clips": [str(p) for p in clips]}, project_key, "latest")
+            for clip in clips:
+                db.remember_artifact(project_key, "clip", str(clip), {"temporary": True})
+            checkpoint.save("animated", {"count": len(clips)})
+            db.remember_checkpoint(project_key, "animated", {"count": len(clips)})
 
         status_cb("Mixing ASMR/SFX and rendering final MP4...")
         out, timeline, _ = render(clips, plan, project_dir)

@@ -21,4 +21,11 @@ def validate_metadata(meta: dict, requested_duration: float, tolerance: float = 
         errors.append("missing video stream")
     if not meta.get("has_audio"):
         errors.append("missing audio stream")
+    fps = meta.get("fps")
+    if fps is not None and fps < 12:
+        errors.append(f"invalid framerate: {fps:.1f} fps")
+    audio_dur = meta.get("audio_duration")
+    video_dur = meta.get("video_duration")
+    if audio_dur and video_dur and abs(audio_dur - video_dur) > tolerance + 0.2:
+        errors.append(f"audio/video duration misalignment: audio {audio_dur:.2f}s vs video {video_dur:.2f}s")
     return errors

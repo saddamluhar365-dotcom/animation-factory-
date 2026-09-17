@@ -2,7 +2,10 @@ from __future__ import annotations
 import re
 from core.contracts import ProjectPlan
 
-_FORBIDDEN = re.compile(r"\b(teleport(?:s|ed|ing)?|magically appears?|disappears? without|duplicates?|floats? without|morphs?|changes shape instantly|cuts to a different object)\b", re.I)
+_FORBIDDEN = re.compile(
+    r"\b(teleport(?:s|ed|ing)?|magically appears?|disappears?(?: without cause)?|duplicates?|floats?(?: without cause)?|morphs?|changes shape instantly|cuts to a different object|unexplained object replacement|impossible hand interaction|broken continuity)\b",
+    re.I,
+)
 
 
 def validate_state_transition(previous: dict, current: dict) -> list[str]:
@@ -41,4 +44,7 @@ def validate_plan_continuity(plan: ProjectPlan) -> list[str]:
         cursor = scene.end
     if abs(cursor - plan.duration) > 0.01:
         errors.append(f"plan total {cursor:.3f}s does not equal requested {plan.duration}s")
+    for prev_scene, curr_scene in zip(plan.scenes, plan.scenes[1:]):
+        if prev_scene.continuity and curr_scene.continuity:
+            errors.extend(validate_state_transition(prev_scene.continuity, curr_scene.continuity))
     return errors

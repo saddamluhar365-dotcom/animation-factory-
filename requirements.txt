@@ -6,3 +6,4 @@ yt-dlp[default]>=2025.1.0
 SQLAlchemy>=2.0.36
 psycopg[binary]>=3.2.3
 pytest>=8.3.0
+huggingface_hub>=0.28.0
