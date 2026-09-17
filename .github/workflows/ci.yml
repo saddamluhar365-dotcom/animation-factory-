@@ -11,6 +11,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+      YT_AUTO_DB_HOST: 127.0.0.1
+      YT_AUTO_DB_PORT: 5432
+      YT_AUTO_DB_NAME: ai_shorts_factory
+      YT_AUTO_DB_USER: postgres
+      YT_AUTO_DB_PASSWORD: postgres
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ai_shorts_factory
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ai_shorts_factory"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
