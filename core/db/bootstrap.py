@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import os
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 DEFAULT_DB = "ai_shorts_factory"
 DEFAULT_USER = "ai_shorts_factory"
@@ -14,10 +16,12 @@ def find_psql() -> str | None:
 
 def postgres_ready() -> bool:
     psql = find_psql()
-    if not psql: return False
+    if not psql:
+        return False
     try:
         return subprocess.run([psql, "--version"], capture_output=True, text=True, timeout=5).returncode == 0
-    except (OSError, subprocess.SubprocessError): return False
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def installation_message() -> str:
@@ -30,4 +34,7 @@ def database_url() -> str:
     db = os.getenv("YT_AUTO_DB_NAME", DEFAULT_DB)
     user = os.getenv("YT_AUTO_DB_USER", DEFAULT_USER)
     password = os.getenv("YT_AUTO_DB_PASSWORD", "")
-    return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}"
+    encoded_user = quote(user, safe="")
+    encoded_password = quote(password, safe="")
+    encoded_db = quote(db, safe="")
+    return f"postgresql+psycopg://{encoded_user}:{encoded_password}@{host}:{port}/{encoded_db}"
