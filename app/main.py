@@ -206,7 +206,8 @@ class App(tk.Tk):
             try:
                 path = download_reference_url(url)
             except Exception as exc:
-                self._post_ui(lambda exc=exc: messagebox.showerror("Download failed", str(exc)))
+                error_message = str(exc)
+                self._post_ui(lambda error_message=error_message: messagebox.showerror("Download failed", error_message))
             else:
                 def done():
                     files.append(str(path))
@@ -235,7 +236,8 @@ class App(tk.Tk):
                     results.append(analyze_reference(Path(file_path)))
                 save_reference_profile(results)
             except Exception as exc:
-                self._post_ui(lambda exc=exc: messagebox.showerror("Reference analysis failed", str(exc)))
+                error_message = str(exc)
+                self._post_ui(lambda error_message=error_message: messagebox.showerror("Reference analysis failed", error_message))
             else:
                 self.write_log("Reference profile saved. It will be reused on future generations.")
 
@@ -252,7 +254,8 @@ class App(tk.Tk):
             try:
                 out = run_project(instruction, duration, self.write_log)
             except Exception as exc:
-                self._post_ui(lambda exc=exc: messagebox.showerror("Generation failed", str(exc)))
+                error_message = str(exc)
+                self._post_ui(lambda error_message=error_message: messagebox.showerror("Generation failed", error_message))
             else:
                 self._post_ui(lambda out=out: messagebox.showinfo("Done", f"Video created:\n{out}"))
 
