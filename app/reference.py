@@ -18,7 +18,15 @@ def download_reference_url(url: str) -> Path:
         import yt_dlp
     except ImportError as exc:
         raise RuntimeError("yt-dlp is required for Shorts URL download") from exc
-    opts = {"outtmpl": str(REF_DIR / "%(id)s.%(ext)s"), "format": "mp4/best", "noplaylist": True, "quiet": True}
+    opts = {
+        "outtmpl": str(REF_DIR / "%(id)s.%(ext)s"),
+        "format": "mp4/best",
+        "noplaylist": True,
+        "quiet": True,
+        "socket_timeout": 20,
+        "retries": 3,
+        "fragment_retries": 3,
+    }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         return Path(ydl.prepare_filename(info))
